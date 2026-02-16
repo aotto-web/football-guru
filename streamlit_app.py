@@ -4,51 +4,62 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from scipy.stats import poisson
+from datetime import datetime
 
-st.set_page_config(page_title="Football God Mode", page_icon="⚽", layout="wide")
+# --- CONFIGURATION & STYLE ---
+st.set_page_config(page_title="Football AI Commander", page_icon="🏆", layout="wide")
 
-# --- CUSTOM CSS ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #FAFAFA; }
+    .match-card {
+        background-color: #1c1c1c;
+        padding: 20px;
+        border-radius: 15px;
+        margin-bottom: 15px;
+        border-left: 6px solid #4CAF50;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .high-conf { border-left-color: #00FF7F; } /* เขียวสด */
+    .med-conf { border-left-color: #FFC107; } /* เหลือง */
+    .low-conf { border-left-color: #F44336; } /* แดง */
     h1, h2, h3 { color: #00FF7F !important; }
-    div[data-testid="stMetricValue"] { color: #00FF7F; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚽ AI Football God Mode")
-st.write("ระบบวิเคราะห์ความน่าจะเป็น: **ดูทีละคู่** หรือ **ดูทั้งลีก**")
+st.title("🏆 Football AI Commander")
+st.write("ระบบวิเคราะห์ฟุตบอลแบบ Hybrid: **ตารางแข่งจริง + เจาะลึกความน่าจะเป็น**")
 
-# --- DATA LOADING ---
+# --- 1. DATA ENGINE (สมอง AI) ---
 @st.cache_resource(ttl=3600)
-def load_data():
+def load_engine():
     urls = [
         "https://www.football-data.co.uk/mmz4281/2324/E0.csv",
         "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
         "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
     ]
-    data_frames = []
+    dfs = []
     for url in urls:
         try:
             df = pd.read_csv(url)
-            data_frames.append(df)
+            dfs.append(df)
         except: pass
-            
-    if not data_frames: return None, None, None, None
-
-    matches = pd.concat(data_frames)
+    
+    matches = pd.concat(dfs)
     cols = ['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR', 'HS', 'AS', 'HST', 'AST']
     matches = matches[cols].dropna()
     matches["Date"] = pd.to_datetime(matches["Date"], dayfirst=True)
     matches = matches.sort_values("Date")
 
-    # Feature Engineering
-    def calculate_features(group):
+    # Feature Engineering (ฟอร์ม 5 นัดล่าสุด + การยิงเข้ากรอบ)
+    def get_stats(group):
         group['H_Form'] = group['FTHG'].rolling(5, closed='left').mean()
         group['A_Form'] = group['FTAG'].rolling(5, closed='left').mean()
+        group['H_Shots'] = group['HST'].rolling(5, closed='left').mean() # Shots on Target
+        group['A_Shots'] = group['AST'].rolling(5, closed='left').mean()
         return group
     
-    matches = matches.groupby('HomeTeam', group_keys=False).apply(calculate_features).dropna()
+    matches = matches.groupby('HomeTeam', group_keys=False).apply(get_stats).dropna()
     
     le = LabelEncoder()
     le.fit(pd.concat([matches["HomeTeam"], matches["AwayTeam"]]))
@@ -56,87 +67,166 @@ def load_data():
     matches["A_Code"] = le.transform(matches["AwayTeam"])
     matches["Target"] = (matches["FTR"] == "H").astype("int")
 
-    rf = RandomForestClassifier(n_estimators=100, min_samples_split=10, random_state=42)
-    predictors = ["H_Code", "A_Code", "H_Form", "A_Form"]
+    # Train Model
+    rf = RandomForestClassifier(n_estimators=200, min_samples_split=5, random_state=42)
+    predictors = ["H_Code", "A_Code", "H_Form", "A_Form", "H_Shots", "A_Shots"]
     rf.fit(matches[predictors], matches["Target"])
     
     return rf, le, matches, predictors
 
-with st.spinner('กำลังคำนวณความเป็นไปได้ทั้งจักรวาล...'):
-    rf, le, matches, predictors = load_data()
+# --- 2. HELPER FUNCTIONS ---
+def map_team_name(name, known_teams):
+    # ระบบแปลภาษาทีม (Important!)
+    mapping = {
+        "Man Utd": "Man United", "Manchester United": "Man United",
+        "Man City": "Man City", "Manchester City": "Man City",
+        "Spurs": "Tottenham", "Tottenham Hotspur": "Tottenham",
+        "Newcastle Utd": "Newcastle", "West Ham Utd": "West Ham",
+        "Wolves": "Wolves", "Wolverhampton": "Wolves",
+        "Brighton & Hove Albion": "Brighton", "Nott'm Forest": "Nott'm Forest",
+        "Nottingham Forest": "Nott'm Forest", "Sheffield Utd": "Sheffield United",
+        "Luton Town": "Luton"
+    }
+    if name in known_teams: return name
+    if name in mapping:
+        if mapping[name] in known_teams: return mapping[name]
+    return None
 
-if rf:
-    # --- สร้าง TAB แยกหน้าจอ ---
-    tab1, tab2 = st.tabs(["🔍 วิเคราะห์รายคู่ (Match)", "📊 ตารางทั้งลีก (League Matrix)"])
-
-    # === TAB 1: วิเคราะห์รายคู่ (เหมือนเดิม) ===
-    with tab1:
-        st.header("เจาะลึกรายแมตช์")
-        c1, c2 = st.columns(2)
-        teams = sorted(le.classes_)
-        h_team = c1.selectbox("เจ้าบ้าน", teams, index=0)
-        a_team = c2.selectbox("ทีมเยือน", teams, index=1)
+def predict_match(h_team, a_team, rf, le, matches, predictors):
+    try:
+        h_stats = matches[matches["HomeTeam"] == h_team].iloc[-1]
+        a_stats = matches[matches["AwayTeam"] == a_team].iloc[-1]
         
-        if st.button("ทำนายผลคู่นี้"):
-            # (Logic เดิม)
-            try:
-                h_stats = matches[matches["HomeTeam"] == h_team].iloc[-1]
-                a_stats = matches[matches["AwayTeam"] == a_team].iloc[-1]
-                
-                row = pd.DataFrame({
-                    "H_Code": [le.transform([h_team])[0]],
-                    "A_Code": [le.transform([a_team])[0]],
-                    "H_Form": [h_stats["H_Form"]],
-                    "A_Form": [a_stats["A_Form"]]
-                })
-                prob = rf.predict_proba(row[predictors])[0][1]
-                
-                st.metric("โอกาสเจ้าบ้านชนะ", f"{prob*100:.1f}%")
-                if prob > 0.6: st.success(f"เชียร์ {h_team} ได้เลย!")
-                elif prob < 0.4: st.error(f"{h_team} ไม่น่ารอด")
-                else: st.warning("สูสีมาก")
-            except: st.error("ข้อมูลไม่พอ")
+        row = pd.DataFrame([[
+            le.transform([h_team])[0], le.transform([a_team])[0],
+            h_stats["H_Form"], a_stats["A_Form"],
+            h_stats["H_Shots"], a_stats["A_Shots"]
+        ]], columns=predictors)
+        
+        prob = rf.predict_proba(row)[0][1]
+        
+        # xG Simulation
+        xg_h = h_stats["H_Shots"] * 0.3 # Conversion rate approx
+        xg_a = a_stats["A_Shots"] * 0.28
+        
+        return prob, xg_h, xg_a
+    except:
+        return None, None, None
 
-    # === TAB 2: ตารางเทพ (League Matrix) ===
-    with tab2:
-        st.header("🔥 ตารางทำนาย: ใครเจอใคร...ใครจะชนะ?")
-        st.write("ตารางนี้แสดง **'โอกาสชนะของเจ้าบ้าน'** ในทุกแมตช์ที่เป็นไปได้")
-        st.info("วิธีดู: เลือกทีมฝั่งซ้าย (เจ้าบ้าน) แล้วไล่ไปทางขวา (เจอทีมไหน) = % ชนะ")
+# --- MAIN APP LOGIC ---
+with st.spinner('🚀 กำลังสตาร์ทเครื่องยนต์ AI...'):
+    rf, le, matches, predictors = load_engine()
 
-        # สร้างตาราง Matrix 20x20
-        all_teams = sorted(le.classes_)
-        matrix_data = []
+# สร้าง Tab แยกโหมด
+tab1, tab2 = st.tabs(["📅 โปรแกรมแข่ง (Schedule)", "🧪 ห้องแล็บวิเคราะห์ (Deep Lab)"])
 
-        # วนลูปทุกทีมเจอทุกทีม
-        for home in all_teams:
-            row_probs = []
-            try:
-                h_stats = matches[matches["HomeTeam"] == home].iloc[-1]
-                h_form = h_stats["H_Form"]
-            except: h_form = 1.5 # ค่ากลางๆถ้าหาไม่เจอ
-
-            for away in all_teams:
-                if home == away:
-                    row_probs.append(0) # เจอตัวเองไม่ได้
-                else:
-                    try:
-                        a_stats = matches[matches["AwayTeam"] == away].iloc[-1]
-                        a_form = a_stats["A_Form"]
-                    except: a_form = 1.5
-                    
-                    # ทำนาย
-                    input_data = pd.DataFrame([[le.transform([home])[0], le.transform([away])[0], h_form, a_form]], columns=predictors)
-                    prob = rf.predict_proba(input_data)[0][1]
-                    row_probs.append(prob)
+# === TAB 1: ตารางแข่งจริง ===
+with tab1:
+    st.header("โปรแกรมการแข่งขันเร็วๆ นี้")
+    # ดึงข้อมูลจาก FixtureDownload
+    try:
+        fixtures = pd.read_json("https://fixturedownload.com/feed/json/epl-2025")
+        fixtures['DateUtc'] = pd.to_datetime(fixtures['DateUtc'])
+        upcoming = fixtures[fixtures['DateUtc'] >= datetime.utcnow()].sort_values('DateUtc').head(10)
+        
+        for idx, row in upcoming.iterrows():
+            d = row['DateUtc']
+            h_raw, a_raw = row['HomeTeam'], row['AwayTeam']
+            h_real = map_team_name(h_raw, le.classes_)
+            a_real = map_team_name(a_raw, le.classes_)
             
-            matrix_data.append(row_probs)
+            if h_real and a_real:
+                prob, xg_h, xg_a = predict_match(h_real, a_real, rf, le, matches, predictors)
+                
+                if prob is not None:
+                    # Logic การติดดาวความมั่นใจ
+                    confidence = abs(prob - 0.5) * 2 # 0 to 1 scale
+                    stars = "⭐" * int(confidence * 5)
+                    if stars == "": stars = "➖"
+                    
+                    if prob > 0.60:
+                        status = "High Confidence: Home Win"
+                        css_class = "high-conf"
+                        color = "#00FF7F"
+                    elif prob < 0.40:
+                        status = "High Confidence: Away Win/Draw"
+                        css_class = "med-conf"
+                        color = "#FFC107"
+                    else:
+                        status = "Too Close to Call (Risky)"
+                        css_class = "low-conf"
+                        color = "#F44336"
 
-        # แสดงผลเป็น DataFrame สีสวยๆ
-        df_matrix = pd.DataFrame(matrix_data, index=all_teams, columns=all_teams)
+                    # แสดงผล Card
+                    st.markdown(f"""
+                    <div class="match-card {css_class}">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span style="color:#888;">{d.strftime('%d %b %H:%M')}</span>
+                            <span style="color:{color}; font-weight:bold;">{stars}</span>
+                        </div>
+                        <h3 style="margin:10px 0;">🏠 {h_real} vs {a_real} ✈️</h3>
+                        <div style="background:#333; padding:10px; border-radius:8px;">
+                            <span style="color:{color}; font-weight:bold;">AI Verdict: {status} ({prob*100:.0f}%)</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # ปุ่มดูรายละเอียด (ใช้ Expander)
+                    with st.expander(f"📊 เจาะลึก {h_real} vs {a_real}"):
+                        c1, c2 = st.columns(2)
+                        c1.metric("คาดการณ์ xG เจ้าบ้าน", f"{xg_h:.2f}")
+                        c2.metric("คาดการณ์ xG ทีมเยือน", f"{xg_a:.2f}")
+                        st.info("💡 Tip: ถ้า AI มั่นใจเกิน 60% ถือว่าน่าลงทุน")
+            
+    except Exception as e:
+        st.error(f"ไม่สามารถโหลดตารางแข่งได้: {e}")
+
+# === TAB 2: วิเคราะห์เอง (Deep Lab) ===
+with tab2:
+    st.header("🧪 เจาะลึกรายคู่ & สกอร์ที่คาด")
+    teams = sorted(le.classes_)
+    c1, c2 = st.columns(2)
+    h_sel = c1.selectbox("เลือกเจ้าบ้าน", teams, index=0)
+    a_sel = c2.selectbox("เลือกทีมเยือน", teams, index=1)
+    
+    if st.button("🔬 วิเคราะห์คู่นี้แบบละเอียด"):
+        prob, xg_h, xg_a = predict_match(h_sel, a_sel, rf, le, matches, predictors)
         
-        # ไฮไลท์สี (เขียว=โอกาสชนะสูง, แดง=โอกาสชนะต่ำ)
-        st.dataframe(
-            df_matrix.style
-            .background_gradient(cmap='RdYlGn', vmin=0.2, vmax=0.8)
-            .format("{:.0%}")
-        , height=800)
+        if prob:
+            st.divider()
+            col1, col2, col3 = st.columns([1,2,1])
+            with col1: st.metric(h_sel, f"{xg_h:.2f} xG")
+            with col3: st.metric(a_sel, f"{xg_a:.2f} xG")
+            with col2:
+                st.metric("โอกาสเจ้าบ้านชนะ", f"{prob*100:.1f}%")
+                st.progress(prob)
+            
+            # --- Correct Score Matrix ---
+            st.subheader("🎯 ความน่าจะเป็นของสกอร์ (Correct Score Matrix)")
+            st.write("สีเขียวเข้ม = สกอร์ที่มีโอกาสเกิดมากที่สุด")
+            
+            score_probs = []
+            for h in range(4): # 0-3
+                row = []
+                for a in range(4):
+                    p = poisson.pmf(h, xg_h) * poisson.pmf(a, xg_a)
+                    row.append(p)
+                score_probs.append(row)
+            
+            df_score = pd.DataFrame(score_probs, 
+                                  columns=[f"Away {i}" for i in range(4)], 
+                                  index=[f"Home {i}" for i in range(4)])
+            
+            st.dataframe(df_score.style.background_gradient(cmap='Greens', axis=None).format("{:.1%}"))
+            
+            # --- Value Bet Check ---
+            st.warning("💰 ใส่ราคา Odds เพื่อเช็คความคุ้มค่า")
+            odds = st.number_input("ราคาเจ้าบ้านชนะ (Home Win Odds):", 1.0, 10.0, 2.0)
+            fair_odds = 1/prob
+            edge = (odds - fair_odds)/fair_odds * 100
+            
+            st.write(f"Fair Odds (ราคาที่ควรเป็น): **{fair_odds:.2f}**")
+            if edge > 0:
+                st.success(f"✅ คุ้มค่าน่าลงทุน! (Edge +{edge:.1f}%)")
+            else:
+                st.error(f"❌ ราคาไม่ดี (Edge {edge:.1f}%) เจ้ามือเอาเปรียบ")
