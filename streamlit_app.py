@@ -6,40 +6,50 @@ from io import StringIO
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from scipy.stats import poisson
-from datetime import datetime, timezone
+from datetime import datetime
 
-# --- CONFIGURATION & STYLE ---
-st.set_page_config(page_title="Football AI Commander", page_icon="🏆", layout="wide")
+# --- 1. CONFIGURATION & GOD TIER STYLE ---
+st.set_page_config(page_title="GOD TIER: Football Analyst", page_icon="👑", layout="wide")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #0e1117; color: #FAFAFA; }
+    .stApp { background-color: #050505; color: #e0e0e0; }
+    h1, h2, h3 { color: #d4af37 !important; font-family: 'Arial Black'; } /* สีทอง */
     .match-card {
-        background-color: #1c1c1c;
+        background-color: #1a1a1a;
         padding: 20px;
-        border-radius: 15px;
+        border-radius: 12px;
         margin-bottom: 15px;
-        border-left: 6px solid #4CAF50;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        border: 1px solid #333;
+        transition: transform 0.2s;
     }
-    .high-conf { border-left-color: #00FF7F; } /* เขียวสด */
-    .med-conf { border-left-color: #FFC107; } /* เหลือง */
-    .low-conf { border-left-color: #F44336; } /* แดง */
-    h1, h2, h3 { color: #00FF7F !important; }
+    .match-card:hover { transform: scale(1.02); border-color: #d4af37; }
+    .stat-box {
+        background: #111;
+        padding: 10px;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid #333;
+    }
+    .kelly-box {
+        background-color: #002200;
+        color: #00ff00;
+        padding: 10px;
+        border-radius: 5px;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Football AI Commander")
-st.write("ระบบวิเคราะห์ฟุตบอลแบบ Hybrid: **ตารางแข่งจริง + เจาะลึกความน่าจะเป็น**")
+st.title("👑 GOD TIER: Football Investment System")
+st.markdown("ระบบวิเคราะห์ระดับกองทุน: **Prediction + Momentum + Money Management**")
 
-# --- 1. DATA ENGINE (สมอง AI) ---
+# --- 2. INTELLIGENT ENGINE ---
 @st.cache_resource(ttl=3600)
 def load_engine():
-    # User-Agent เพื่อป้องกันการโดนบล็อก
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
+    headers = {"User-Agent": "Mozilla/5.0"}
     urls = [
         "https://www.football-data.co.uk/mmz4281/2324/E0.csv",
         "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
@@ -48,14 +58,12 @@ def load_engine():
     dfs = []
     for url in urls:
         try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                df = pd.read_csv(StringIO(response.text))
-                dfs.append(df)
+            r = requests.get(url, headers=headers)
+            if r.status_code == 200:
+                dfs.append(pd.read_csv(StringIO(r.text)))
         except: pass
     
-    if not dfs:
-        return None, None, None, None
+    if not dfs: return None, None, None, None
 
     matches = pd.concat(dfs)
     cols = ['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR', 'HS', 'AS', 'HST', 'AST']
@@ -63,15 +71,17 @@ def load_engine():
     matches["Date"] = pd.to_datetime(matches["Date"], dayfirst=True)
     matches = matches.sort_values("Date")
 
-    # Feature Engineering
-    def get_stats(group):
-        group['H_Form'] = group['FTHG'].rolling(5, closed='left').mean()
-        group['A_Form'] = group['FTAG'].rolling(5, closed='left').mean()
-        group['H_Shots'] = group['HST'].rolling(5, closed='left').mean() 
-        group['A_Shots'] = group['AST'].rolling(5, closed='left').mean()
+    # Advanced Feature Engineering
+    def get_features(group):
+        # ฟอร์มการเล่น (Rolling Points: ชนะ=3, เสมอ=1)
+        group['Points'] = group['FTR'].apply(lambda x: 3 if x == 'H' else (1 if x == 'D' else 0)) # คิดแบบเจ้าบ้าน
+        group['Form_Point'] = group['Points'].rolling(5, closed='left').mean()
+        
+        group['H_Goal_Avg'] = group['FTHG'].rolling(5, closed='left').mean()
+        group['A_Goal_Avg'] = group['FTAG'].rolling(5, closed='left').mean()
         return group
     
-    matches = matches.groupby('HomeTeam', group_keys=False).apply(get_stats).dropna()
+    matches = matches.groupby('HomeTeam', group_keys=False).apply(get_features).dropna()
     
     le = LabelEncoder()
     le.fit(pd.concat([matches["HomeTeam"], matches["AwayTeam"]]))
@@ -79,173 +89,157 @@ def load_engine():
     matches["A_Code"] = le.transform(matches["AwayTeam"])
     matches["Target"] = (matches["FTR"] == "H").astype("int")
 
-    # Train Model
-    rf = RandomForestClassifier(n_estimators=200, min_samples_split=5, random_state=42)
-    predictors = ["H_Code", "A_Code", "H_Form", "A_Form", "H_Shots", "A_Shots"]
+    # Hyper-Tuned Random Forest
+    rf = RandomForestClassifier(n_estimators=300, max_depth=12, min_samples_split=4, random_state=42)
+    predictors = ["H_Code", "A_Code", "Form_Point", "H_Goal_Avg", "A_Goal_Avg"]
     rf.fit(matches[predictors], matches["Target"])
     
     return rf, le, matches, predictors
 
-# --- 2. HELPER FUNCTIONS ---
-def map_team_name(name, known_teams):
-    mapping = {
-        "Man Utd": "Man United", "Manchester Utd": "Man United", "Manchester United": "Man United",
-        "Man City": "Man City", "Manchester City": "Man City",
-        "Spurs": "Tottenham", "Tottenham Hotspur": "Tottenham",
-        "Newcastle Utd": "Newcastle", "West Ham Utd": "West Ham",
-        "Wolves": "Wolves", "Wolverhampton": "Wolves",
-        "Brighton & Hove Albion": "Brighton", "Nott'm Forest": "Nott'm Forest",
-        "Nottingham Forest": "Nott'm Forest", "Sheffield Utd": "Sheffield United",
-        "Luton Town": "Luton", "Ipswich Town": "Ipswich"
-    }
-    if name in known_teams: return name
-    if name in mapping:
-        if mapping[name] in known_teams: return mapping[name]
+# --- 3. UTILITY FUNCTIONS ---
+def calculate_kelly(prob, odds):
+    # Kelly Criterion Formula: f = (bp - q) / b
+    # b = odds - 1
+    # p = probability
+    # q = 1 - p
+    if prob <= 0.5: return 0 # ถ้าโอกาสชนะไม่ถึง 50% ห้ามเล่นตามสูตรนี้
+    b = odds - 1
+    q = 1 - prob
+    f = (b * prob - q) / b
+    return max(f * 100, 0) # Return as percentage
+
+def get_momentum(team, matches):
+    # ดึงฟอร์ม 10 นัดหลังสุดเพื่อพลอตกราฟ
+    try:
+        team_matches = matches[(matches['HomeTeam'] == team) | (matches['AwayTeam'] == team)].tail(10)
+        points = []
+        for _, row in team_matches.iterrows():
+            if row['HomeTeam'] == team:
+                pts = 3 if row['FTR'] == 'H' else (1 if row['FTR'] == 'D' else 0)
+            else:
+                pts = 3 if row['FTR'] == 'A' else (1 if row['FTR'] == 'D' else 0)
+            points.append(pts)
+        return points
+    except: return []
+
+def map_name(name, known):
+    mapping = {"Man Utd": "Man United", "Spurs": "Tottenham", "Nott'm Forest": "Nott'm Forest", 
+               "Wolves": "Wolves", "Man City": "Man City", "Newcastle Utd": "Newcastle",
+               "Sheffield Utd": "Sheffield United", "Luton Town": "Luton", "West Ham Utd": "West Ham"}
+    if name in known: return name
+    if name in mapping and mapping[name] in known: return mapping[name]
     return None
 
-def predict_match(h_team, a_team, rf, le, matches, predictors):
-    try:
-        h_stats = matches[matches["HomeTeam"] == h_team].iloc[-1]
-        a_stats = matches[matches["AwayTeam"] == a_team].iloc[-1]
-        
-        row = pd.DataFrame([[
-            le.transform([h_team])[0], le.transform([a_team])[0],
-            h_stats["H_Form"], a_stats["A_Form"],
-            h_stats["H_Shots"], a_stats["A_Shots"]
-        ]], columns=predictors)
-        
-        prob = rf.predict_proba(row)[0][1]
-        xg_h = h_stats["H_Shots"] * 0.3
-        xg_a = a_stats["A_Shots"] * 0.28
-        return prob, xg_h, xg_a
-    except:
-        return None, None, None
-
-# --- MAIN APP LOGIC ---
-with st.spinner('🚀 กำลังสตาร์ทเครื่องยนต์ AI...'):
+# --- 4. MAIN INTERFACE ---
+with st.spinner('🔄 Loading God Mode System...'):
     rf, le, matches, predictors = load_engine()
 
-tab1, tab2 = st.tabs(["📅 โปรแกรมแข่ง (Schedule)", "🧪 ห้องแล็บวิเคราะห์ (Deep Lab)"])
+# Tab Layout
+tab1, tab2 = st.tabs(["📅 Live War Room", "🧪 Lab Analysis"])
 
-# === TAB 1: ตารางแข่งจริง ===
+# === TAB 1: WAR ROOM ===
 with tab1:
-    st.header("โปรแกรมการแข่งขันเร็วๆ นี้")
-    
+    st.subheader("โปรแกรมการแข่งขัน & สัญญาณชีพ (Next Matches)")
     try:
-        # ใช้ User-Agent ปลอมตัว
-        url = "https://fixturedownload.com/feed/json/epl-2025"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            fixtures = pd.read_json(StringIO(response.text))
-            
-            # --- จุดที่แก้ไข: แปลงเวลาให้เป็น UTC ทั้งคู่ ---
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get("https://fixturedownload.com/feed/json/epl-2025", headers=headers)
+        if r.status_code == 200:
+            fixtures = pd.read_json(StringIO(r.text))
             fixtures['DateUtc'] = pd.to_datetime(fixtures['DateUtc'], utc=True)
             now_utc = pd.Timestamp.now('UTC')
+            upcoming = fixtures[fixtures['DateUtc'] >= now_utc].sort_values('DateUtc').head(6)
             
-            # กรองเอาเฉพาะแมตช์ที่ยังไม่เตะ
-            upcoming = fixtures[fixtures['DateUtc'] >= now_utc].sort_values('DateUtc').head(10)
-            
-            if upcoming.empty:
-                st.info("ไม่มีการแข่งขันในเร็วๆ นี้ หรือจบฤดูกาลแล้ว")
-            
-            for idx, row in upcoming.iterrows():
-                d = row['DateUtc']
-                h_raw, a_raw = row['HomeTeam'], row['AwayTeam']
-                h_real = map_team_name(h_raw, le.classes_)
-                a_real = map_team_name(a_raw, le.classes_)
+            for _, row in upcoming.iterrows():
+                h_real = map_name(row['HomeTeam'], le.classes_)
+                a_real = map_name(row['AwayTeam'], le.classes_)
                 
                 if h_real and a_real:
-                    prob, xg_h, xg_a = predict_match(h_real, a_real, rf, le, matches, predictors)
+                    # Predict
+                    h_stat = matches[matches["HomeTeam"] == h_real].iloc[-1]
+                    a_stat = matches[matches["AwayTeam"] == a_real].iloc[-1]
                     
-                    if prob is not None:
-                        confidence = abs(prob - 0.5) * 2
-                        stars = "⭐" * int(confidence * 5)
-                        if stars == "": stars = "➖"
-                        
-                        if prob > 0.60:
-                            status = "High Confidence: Home Win"
-                            css_class = "high-conf"
-                            color = "#00FF7F"
-                        elif prob < 0.40:
-                            status = "High Confidence: Away Win/Draw"
-                            css_class = "med-conf"
-                            color = "#FFC107"
-                        else:
-                            status = "Too Close to Call (Risky)"
-                            css_class = "low-conf"
-                            color = "#F44336"
-
-                        st.markdown(f"""
-                        <div class="match-card {css_class}">
-                            <div style="display:flex; justify-content:space-between;">
-                                <span style="color:#888;">{d.strftime('%d %b %H:%M')}</span>
-                                <span style="color:{color}; font-weight:bold;">{stars}</span>
-                            </div>
-                            <h3 style="margin:10px 0;">🏠 {h_real} vs {a_real} ✈️</h3>
-                            <div style="background:#333; padding:10px; border-radius:8px;">
-                                <span style="color:{color}; font-weight:bold;">AI Verdict: {status} ({prob*100:.0f}%)</span>
-                            </div>
+                    row_pred = [[le.transform([h_real])[0], le.transform([a_real])[0], 
+                                 h_stat["Form_Point"], h_stat["H_Goal_Avg"], a_stat["A_Goal_Avg"]]]
+                    prob = rf.predict_proba(row_pred)[0][1]
+                    
+                    # Color Logic
+                    color = "#00ff00" if prob > 0.6 else "#ff4444" if prob < 0.4 else "#ffbb00"
+                    rec = "STRONG BUY" if prob > 0.65 else ("AVOID" if 0.4 <= prob <= 0.6 else "SELL / UNDERDOG")
+                    
+                    # Card UI
+                    st.markdown(f"""
+                    <div class="match-card">
+                        <div style="display:flex; justify-content:space-between; color:#888;">
+                            <span>{row['DateUtc'].strftime('%d %b %H:%M')}</span>
+                            <span style="color:{color}; font-weight:bold;">{rec}</span>
                         </div>
-                        """, unsafe_allow_html=True)
-                        
-                        with st.expander(f"📊 เจาะลึก {h_real} vs {a_real}"):
-                            c1, c2 = st.columns(2)
-                            c1.metric("คาดการณ์ xG เจ้าบ้าน", f"{xg_h:.2f}")
-                            c2.metric("คาดการณ์ xG ทีมเยือน", f"{xg_a:.2f}")
-                            st.info("💡 Tip: ถ้า AI มั่นใจเกิน 60% ถือว่าน่าลงทุน")
-        else:
-            st.error(f"ไม่สามารถดึงตารางแข่งได้ (Status Code: {response.status_code})")
-            
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาด: {e}")
+                        <h2 style="text-align:center; margin:10px 0;">{h_real} vs {a_real}</h2>
+                        <div class="stat-box">
+                             AI Probability: <span style="color:{color}; font-size:1.2em;">{prob*100:.1f}%</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    with st.expander(f"📉 ดูเทรนด์กราฟ {h_real} vs {a_real}"):
+                        # Momentum Graph
+                        chart_data = pd.DataFrame({
+                            h_real: get_momentum(h_real, matches),
+                            a_real: get_momentum(a_real, matches)
+                        })
+                        st.line_chart(chart_data)
+                        st.caption("กราฟแสดงแต้มที่ได้ใน 10 นัดหลัง (สูง=ฟอร์มดี, ต่ำ=ฟอร์มตก)")
 
-# === TAB 2: วิเคราะห์เอง (Deep Lab) ===
+    except Exception as e: st.error(f"System Offline: {e}")
+
+# === TAB 2: LAB ANALYSIS (KELLY CRITERION) ===
 with tab2:
-    st.header("🧪 เจาะลึกรายคู่ & สกอร์ที่คาด")
-    if rf:
-        teams = sorted(le.classes_)
-        c1, c2 = st.columns(2)
-        h_sel = c1.selectbox("เลือกเจ้าบ้าน", teams, index=0)
-        a_sel = c2.selectbox("เลือกทีมเยือน", teams, index=1)
+    st.header("🧪 คำนวณความคุ้มค่าระดับกองทุน")
+    
+    c1, c2 = st.columns(2)
+    h_sel = c1.selectbox("Home Team", sorted(le.classes_), index=0)
+    a_sel = c2.selectbox("Away Team", sorted(le.classes_), index=1)
+    
+    if st.button("🚀 Analyze Now"):
+        h_stat = matches[matches["HomeTeam"] == h_sel].iloc[-1]
+        a_stat = matches[matches["AwayTeam"] == a_sel].iloc[-1]
         
-        if st.button("🔬 วิเคราะห์คู่นี้แบบละเอียด"):
-            prob, xg_h, xg_a = predict_match(h_sel, a_sel, rf, le, matches, predictors)
+        row_pred = [[le.transform([h_sel])[0], le.transform([a_sel])[0], 
+                     h_stat["Form_Point"], h_stat["H_Goal_Avg"], a_stat["A_Goal_Avg"]]]
+        prob = rf.predict_proba(row_pred)[0][1]
+        
+        st.divider()
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader(f"AI Probability: {prob*100:.1f}%")
+            fair_odds = 1/prob
+            st.write(f"Fair Odds (ราคาเป็นกลาง): **{fair_odds:.2f}**")
             
-            if prob:
-                st.divider()
-                col1, col2, col3 = st.columns([1,2,1])
-                with col1: st.metric(h_sel, f"{xg_h:.2f} xG")
-                with col3: st.metric(a_sel, f"{xg_a:.2f} xG")
-                with col2:
-                    st.metric("โอกาสเจ้าบ้านชนะ", f"{prob*100:.1f}%")
-                    st.progress(prob)
+            # Momentum Chart
+            st.write("#### 📈 Momentum Trend")
+            chart_data = pd.DataFrame({
+                h_sel: get_momentum(h_sel, matches),
+                a_sel: get_momentum(a_sel, matches)
+            })
+            st.line_chart(chart_data)
+
+        with col2:
+            st.write("#### 💰 Money Management")
+            market_odds = st.number_input("ราคาตลาด (Odds):", 1.01, 20.0, 2.00)
+            
+            if market_odds > 1.0:
+                kelly_pct = calculate_kelly(prob, market_odds)
+                edge = (market_odds - fair_odds) / fair_odds * 100
                 
-                st.subheader("🎯 ความน่าจะเป็นของสกอร์ (Correct Score Matrix)")
-                score_probs = []
-                for h in range(4): # 0-3
-                    row = []
-                    for a in range(4):
-                        p = poisson.pmf(h, xg_h) * poisson.pmf(a, xg_a)
-                        row.append(p)
-                    score_probs.append(row)
-                
-                df_score = pd.DataFrame(score_probs, 
-                                      columns=[f"Away {i}" for i in range(4)], 
-                                      index=[f"Home {i}" for i in range(4)])
-                
-                st.dataframe(df_score.style.background_gradient(cmap='Greens', axis=None).format("{:.1%}"))
-                
-                st.warning("💰 ใส่ราคา Odds เพื่อเช็คความคุ้มค่า")
-                odds = st.number_input("ราคาเจ้าบ้านชนะ (Home Win Odds):", 1.0, 10.0, 2.0)
-                fair_odds = 1/prob
-                edge = (odds - fair_odds)/fair_odds * 100
-                
-                st.write(f"Fair Odds (ราคาที่ควรเป็น): **{fair_odds:.2f}**")
                 if edge > 0:
-                    st.success(f"✅ คุ้มค่าน่าลงทุน! (Edge +{edge:.1f}%)")
+                    st.success(f"✅ มีกำไรส่วนต่าง (Edge): +{edge:.1f}%")
+                    st.markdown(f"""
+                    <div class="kelly-box">
+                        ควรลงทุน: {kelly_pct:.1f}% ของพอร์ต<br>
+                        (Kelly Criterion Recommendation)
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.caption("*Kelly แนะนำให้ลงตามสัดส่วนความมั่นใจ เพื่อการเติบโตระยะยาว")
                 else:
-                    st.error(f"❌ ราคาไม่ดี (Edge {edge:.1f}%) เจ้ามือเอาเปรียบ")
+                    st.error(f"❌ เสียเปรียบเจ้ามือ (Edge: {edge:.1f}%)")
+                    st.markdown("""<div class="kelly-box" style="background:#440000; color:#ffcccc;">ควรลงทุน: 0% (ห้ามเล่น)</div>""", unsafe_allow_html=True)
