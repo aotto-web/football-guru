@@ -5,34 +5,21 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from scipy.stats import poisson
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Pro Football Analyst", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Football God Mode", page_icon="⚽", layout="wide")
 
-# --- CUSTOM CSS (ตกแต่งให้ดูแพง) ---
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
-    div.stButton > button:first-child {
-        background-color: #009933;
-        color: white;
-        font-size: 20px;
-        font-weight: bold;
-        border-radius: 10px;
-        padding: 10px 24px;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-    }
+    .stApp { background-color: #0e1117; color: #FAFAFA; }
+    h1, h2, h3 { color: #00FF7F !important; }
+    div[data-testid="stMetricValue"] { color: #00FF7F; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚽ Pro Football Analyst: Advanced AI")
-st.markdown("ระบบวิเคราะห์ฟุตบอลขั้นสูง: **Weighted Opponent Strength + Monte Carlo Simulation**")
+st.title("⚽ AI Football God Mode")
+st.write("ระบบวิเคราะห์ความน่าจะเป็น: **ดูทีละคู่** หรือ **ดูทั้งลีก**")
 
-# --- DATA ENGINE ---
+# --- DATA LOADING ---
 @st.cache_resource(ttl=3600)
 def load_data():
     urls = [
@@ -40,145 +27,116 @@ def load_data():
         "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
         "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
     ]
-    
     data_frames = []
     for url in urls:
         try:
             df = pd.read_csv(url)
-            # สร้างฟีเจอร์ง่ายๆ: คะแนนความยากของคู่แข่ง (League Points)
-            # ใน data set นี้ไม่มีตารางคะแนน เราจะใช้ "ผลต่างประตูได้เสียสะสม" เป็นตัววัดความเก่งแทน
             data_frames.append(df)
-        except:
-            pass
+        except: pass
             
-    if not data_frames:
-        return None, None, None
+    if not data_frames: return None, None, None, None
 
     matches = pd.concat(data_frames)
     cols = ['Date', 'HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'FTR', 'HS', 'AS', 'HST', 'AST']
     matches = matches[cols].dropna()
     matches["Date"] = pd.to_datetime(matches["Date"], dayfirst=True)
     matches = matches.sort_values("Date")
-    
-    # Feature Engineering ขั้นสูง: Form + Opponent Difficulty
-    # คำนวณค่าเฉลี่ยย้อนหลัง 5 นัด (Weighted)
+
+    # Feature Engineering
     def calculate_features(group):
-        group['Home_Form_Goals'] = group['FTHG'].rolling(5, closed='left').mean()
-        group['Away_Form_Goals'] = group['FTAG'].rolling(5, closed='left').mean()
-        group['Home_Form_Shots'] = group['HST'].rolling(5, closed='left').mean() # ยิงเข้ากรอบ
-        group['Away_Form_Shots'] = group['AST'].rolling(5, closed='left').mean()
+        group['H_Form'] = group['FTHG'].rolling(5, closed='left').mean()
+        group['A_Form'] = group['FTAG'].rolling(5, closed='left').mean()
         return group
     
-    # แยกคำนวณเหย้า-เยือน
-    matches = matches.groupby('HomeTeam', group_keys=False).apply(calculate_features)
-    matches = matches.dropna()
+    matches = matches.groupby('HomeTeam', group_keys=False).apply(calculate_features).dropna()
     
-    # Encoding
     le = LabelEncoder()
     le.fit(pd.concat([matches["HomeTeam"], matches["AwayTeam"]]))
-    matches["HomeTeam_Code"] = le.transform(matches["HomeTeam"])
-    matches["AwayTeam_Code"] = le.transform(matches["AwayTeam"])
-    matches["Target"] = (matches["FTR"] == "H").astype("int") # 1=Home Win
+    matches["H_Code"] = le.transform(matches["HomeTeam"])
+    matches["A_Code"] = le.transform(matches["AwayTeam"])
+    matches["Target"] = (matches["FTR"] == "H").astype("int")
 
-    # Train Random Forest Model
-    rf = RandomForestClassifier(n_estimators=150, max_depth=10, random_state=42)
-    predictors = ["HomeTeam_Code", "AwayTeam_Code", "Home_Form_Goals", "Away_Form_Goals", "Home_Form_Shots", "Away_Form_Shots"]
+    rf = RandomForestClassifier(n_estimators=100, min_samples_split=10, random_state=42)
+    predictors = ["H_Code", "A_Code", "H_Form", "A_Form"]
     rf.fit(matches[predictors], matches["Target"])
     
     return rf, le, matches, predictors
 
-# --- APP LOGIC ---
-with st.spinner('⚙️ กำลังจูนสมอง AI ระดับ Pro...'):
+with st.spinner('กำลังคำนวณความเป็นไปได้ทั้งจักรวาล...'):
     rf, le, matches, predictors = load_data()
 
-if rf is None:
-    st.error("เกิดข้อผิดพลาดในการโหลดข้อมูล")
-else:
-    # Sidebar
-    st.sidebar.header("🔍 เลือกแมตช์ที่ต้องการ")
-    teams = sorted(le.classes_)
-    home_team = st.sidebar.selectbox("เจ้าบ้าน (Home)", teams, index=0)
-    away_team = st.sidebar.selectbox("ทีมเยือน (Away)", teams, index=1)
+if rf:
+    # --- สร้าง TAB แยกหน้าจอ ---
+    tab1, tab2 = st.tabs(["🔍 วิเคราะห์รายคู่ (Match)", "📊 ตารางทั้งลีก (League Matrix)"])
 
-    if st.sidebar.button("🚀 วิเคราะห์เชิงลึก (Deep Analyze)"):
-        if home_team == away_team:
-            st.error("กรุณาเลือกทีมให้ต่างกัน")
-        else:
-            # 1. ดึงสถิติล่าสุด
+    # === TAB 1: วิเคราะห์รายคู่ (เหมือนเดิม) ===
+    with tab1:
+        st.header("เจาะลึกรายแมตช์")
+        c1, c2 = st.columns(2)
+        teams = sorted(le.classes_)
+        h_team = c1.selectbox("เจ้าบ้าน", teams, index=0)
+        a_team = c2.selectbox("ทีมเยือน", teams, index=1)
+        
+        if st.button("ทำนายผลคู่นี้"):
+            # (Logic เดิม)
             try:
-                h_stats = matches[matches["HomeTeam"] == home_team].iloc[-1]
-                a_stats = matches[matches["AwayTeam"] == away_team].iloc[-1]
+                h_stats = matches[matches["HomeTeam"] == h_team].iloc[-1]
+                a_stats = matches[matches["AwayTeam"] == a_team].iloc[-1]
                 
-                # Input Data
-                input_row = pd.DataFrame({
-                    "HomeTeam_Code": [le.transform([home_team])[0]],
-                    "AwayTeam_Code": [le.transform([away_team])[0]],
-                    "Home_Form_Goals": [h_stats["Home_Form_Goals"]],
-                    "Away_Form_Goals": [a_stats["Away_Form_Goals"]],
-                    "Home_Form_Shots": [h_stats["Home_Form_Shots"]],
-                    "Away_Form_Shots": [a_stats["Away_Form_Shots"]]
+                row = pd.DataFrame({
+                    "H_Code": [le.transform([h_team])[0]],
+                    "A_Code": [le.transform([a_team])[0]],
+                    "H_Form": [h_stats["H_Form"]],
+                    "A_Form": [a_stats["A_Form"]]
                 })
+                prob = rf.predict_proba(row[predictors])[0][1]
                 
-                # Prediction
-                win_prob = rf.predict_proba(input_row[predictors])[0][1]
-                lose_prob = 1 - win_prob
-                
-                # 2. Poisson Simulation (ทำนายสกอร์)
-                # คำนวณ Expected Goals (xG) คร่าวๆ จากฟอร์มยิงเข้ากรอบ
-                # (สูตรประยุกต์: ยิงเข้ากรอบเฉลี่ย * Conversion Rate เฉลี่ยลีก ~0.3)
-                home_xg = h_stats["Home_Form_Shots"] * 0.32
-                away_xg = a_stats["Away_Form_Shots"] * 0.28 # ทีมเยือนมักยิงได้น้อยกว่า
-                
-                # --- แสดงผลหน้าจอ ---
-                st.markdown("---")
-                col1, col2, col3 = st.columns([1, 2, 1])
-                
-                with col1:
-                    st.markdown(f"<h3 style='text-align: center; color: #1f77b4;'>{home_team}</h3>", unsafe_allow_html=True)
-                    st.markdown(f"<p style='text-align: center;'>ฟอร์มยิง: {h_stats['Home_Form_Goals']:.2f} ลูก/นัด</p>", unsafe_allow_html=True)
-                with col2:
-                    st.markdown("<h1 style='text-align: center;'>VS</h1>", unsafe_allow_html=True)
-                    st.progress(win_prob)
-                    st.caption(f"โอกาสเจ้าบ้านชนะ: {win_prob*100:.1f}%")
-                with col3:
-                    st.markdown(f"<h3 style='text-align: center; color: #ff7f0e;'>{away_team}</h3>", unsafe_allow_html=True)
-                    st.markdown(f"<p style='text-align: center;'>ฟอร์มยิง: {a_stats['Away_Form_Goals']:.2f} ลูก/นัด</p>", unsafe_allow_html=True)
+                st.metric("โอกาสเจ้าบ้านชนะ", f"{prob*100:.1f}%")
+                if prob > 0.6: st.success(f"เชียร์ {h_team} ได้เลย!")
+                elif prob < 0.4: st.error(f"{h_team} ไม่น่ารอด")
+                else: st.warning("สูสีมาก")
+            except: st.error("ข้อมูลไม่พอ")
 
-                # --- Section: Correct Score Matrix ---
-                st.markdown("### 🎯 ความน่าจะเป็นของสกอร์ (Correct Score Probability)")
-                
-                score_probs = []
-                for h in range(4): # 0-3 ประตู
-                    row = []
-                    for a in range(4):
-                        prob = poisson.pmf(h, home_xg) * poisson.pmf(a, away_xg)
-                        row.append(prob)
-                    score_probs.append(row)
-                
-                score_df = pd.DataFrame(score_probs, columns=[f"Away {i}" for i in range(4)], index=[f"Home {i}" for i in range(4)])
-                st.dataframe(score_df.style.background_gradient(cmap='Greens', axis=None).format("{:.1%}"))
-                
-                st.info(f"💡 **xG ที่คาดการณ์:** {home_team} ({home_xg:.2f}) - {away_team} ({away_xg:.2f})")
+    # === TAB 2: ตารางเทพ (League Matrix) ===
+    with tab2:
+        st.header("🔥 ตารางทำนาย: ใครเจอใคร...ใครจะชนะ?")
+        st.write("ตารางนี้แสดง **'โอกาสชนะของเจ้าบ้าน'** ในทุกแมตช์ที่เป็นไปได้")
+        st.info("วิธีดู: เลือกทีมฝั่งซ้าย (เจ้าบ้าน) แล้วไล่ไปทางขวา (เจอทีมไหน) = % ชนะ")
 
-                # --- Section: Value Betting ---
-                st.markdown("### 💰 ตรวจสอบความคุ้มค่า (Value Bet)")
-                user_odds = st.number_input("ใส่ราคาต่อรอง (Odds) ที่คุณเห็น:", min_value=1.0, step=0.01)
-                
-                fair_odds = 1/win_prob if win_prob > 0 else 0
-                
-                c1, c2 = st.columns(2)
-                c1.metric("ราคาที่ควรจะเป็น (Fair Odds)", f"{fair_odds:.2f}")
-                
-                if user_odds > 1.0:
-                    edge = (user_odds - fair_odds) / fair_odds * 100
-                    c2.metric("กำไรคาดหวัง (Edge)", f"{edge:.2f}%", delta_color="normal" if edge > 0 else "inverse")
+        # สร้างตาราง Matrix 20x20
+        all_teams = sorted(le.classes_)
+        matrix_data = []
+
+        # วนลูปทุกทีมเจอทุกทีม
+        for home in all_teams:
+            row_probs = []
+            try:
+                h_stats = matches[matches["HomeTeam"] == home].iloc[-1]
+                h_form = h_stats["H_Form"]
+            except: h_form = 1.5 # ค่ากลางๆถ้าหาไม่เจอ
+
+            for away in all_teams:
+                if home == away:
+                    row_probs.append(0) # เจอตัวเองไม่ได้
+                else:
+                    try:
+                        a_stats = matches[matches["AwayTeam"] == away].iloc[-1]
+                        a_form = a_stats["A_Form"]
+                    except: a_form = 1.5
                     
-                    if edge > 5:
-                        st.success("🌟 **Highly Recommended!** คู่นี้มีกำไรส่วนต่างสูงน่าลงทุน")
-                    elif edge > 0:
-                        st.info("✅ **Investable** พอน่าลุ้น มีกำไรบางๆ")
-                    else:
-                        st.error("🛑 **Overpriced** ราคาไม่คุ้มเสี่ยง (เจ้ามือเอาเปรียบ)")
+                    # ทำนาย
+                    input_data = pd.DataFrame([[le.transform([home])[0], le.transform([away])[0], h_form, a_form]], columns=predictors)
+                    prob = rf.predict_proba(input_data)[0][1]
+                    row_probs.append(prob)
+            
+            matrix_data.append(row_probs)
 
-            except IndexError:
-                st.warning("ข้อมูลไม่เพียงพอสำหรับการวิเคราะห์คู่นี้ (อาจเป็นทีมเลื่อนชั้น)")
+        # แสดงผลเป็น DataFrame สีสวยๆ
+        df_matrix = pd.DataFrame(matrix_data, index=all_teams, columns=all_teams)
+        
+        # ไฮไลท์สี (เขียว=โอกาสชนะสูง, แดง=โอกาสชนะต่ำ)
+        st.dataframe(
+            df_matrix.style
+            .background_gradient(cmap='RdYlGn', vmin=0.2, vmax=0.8)
+            .format("{:.0%}")
+        , height=800)
