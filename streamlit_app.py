@@ -6,7 +6,7 @@ from io import StringIO
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from scipy.stats import poisson
-from datetime import datetime
+from datetime import datetime, timezone
 
 # --- CONFIGURATION & STYLE ---
 st.set_page_config(page_title="Football AI Commander", page_icon="🏆", layout="wide")
@@ -29,13 +29,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Football AI Commander (Fixed)")
+st.title("🏆 Football AI Commander")
 st.write("ระบบวิเคราะห์ฟุตบอลแบบ Hybrid: **ตารางแข่งจริง + เจาะลึกความน่าจะเป็น**")
 
 # --- 1. DATA ENGINE (สมอง AI) ---
 @st.cache_resource(ttl=3600)
 def load_engine():
-    # ใช้ User-Agent ปลอมตัวเพื่อดึงข้อมูลย้อนหลัง
+    # User-Agent เพื่อป้องกันการโดนบล็อก
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
@@ -67,7 +67,7 @@ def load_engine():
     def get_stats(group):
         group['H_Form'] = group['FTHG'].rolling(5, closed='left').mean()
         group['A_Form'] = group['FTAG'].rolling(5, closed='left').mean()
-        group['H_Shots'] = group['HST'].rolling(5, closed='left').mean() # Shots on Target
+        group['H_Shots'] = group['HST'].rolling(5, closed='left').mean() 
         group['A_Shots'] = group['AST'].rolling(5, closed='left').mean()
         return group
     
@@ -125,15 +125,14 @@ def predict_match(h_team, a_team, rf, le, matches, predictors):
 with st.spinner('🚀 กำลังสตาร์ทเครื่องยนต์ AI...'):
     rf, le, matches, predictors = load_engine()
 
-# สร้าง Tab แยกโหมด
 tab1, tab2 = st.tabs(["📅 โปรแกรมแข่ง (Schedule)", "🧪 ห้องแล็บวิเคราะห์ (Deep Lab)"])
 
 # === TAB 1: ตารางแข่งจริง ===
 with tab1:
     st.header("โปรแกรมการแข่งขันเร็วๆ นี้")
     
-    # --- ส่วนที่แก้: ปลอมตัวเป็น Browser เพื่อดึงตารางแข่ง ---
     try:
+        # ใช้ User-Agent ปลอมตัว
         url = "https://fixturedownload.com/feed/json/epl-2025"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -142,8 +141,13 @@ with tab1:
         
         if response.status_code == 200:
             fixtures = pd.read_json(StringIO(response.text))
-            fixtures['DateUtc'] = pd.to_datetime(fixtures['DateUtc'])
-            upcoming = fixtures[fixtures['DateUtc'] >= datetime.utcnow()].sort_values('DateUtc').head(10)
+            
+            # --- จุดที่แก้ไข: แปลงเวลาให้เป็น UTC ทั้งคู่ ---
+            fixtures['DateUtc'] = pd.to_datetime(fixtures['DateUtc'], utc=True)
+            now_utc = pd.Timestamp.now('UTC')
+            
+            # กรองเอาเฉพาะแมตช์ที่ยังไม่เตะ
+            upcoming = fixtures[fixtures['DateUtc'] >= now_utc].sort_values('DateUtc').head(10)
             
             if upcoming.empty:
                 st.info("ไม่มีการแข่งขันในเร็วๆ นี้ หรือจบฤดูกาลแล้ว")
