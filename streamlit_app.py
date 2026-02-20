@@ -4,137 +4,92 @@ import numpy as np
 from scipy.stats import poisson
 import requests
 
-# --- ตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="PL Auto-Guru 2026", layout="wide", page_icon="⚽")
-st.title("🏆 Premier League Auto-Predictor (Live API)")
+# --- ตั้งค่าหน้าจอแบบกะทัดรัด ---
+st.set_page_config(page_title="PL Guru", layout="centered", page_icon="⚽")
 
-# API Key ที่คุณให้มา
-API_KEY = "2ab1eb65a8b94e8ea240487d86d1e6a5" 
+# --- สไตล์ปรับแต่งให้ดูแพงบนมือถือ ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stMetric { background-color: #ffffff; padding: 10px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    [data-testid="stExpander"] { border: none !important; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 12px; margin-bottom: 15px; background: white; }
+    .stMarkdown h1 { font-size: 24px !important; text-align: center; color: #3d0158; }
+    </style>
+    """, unsafe_content_allowed=True)
+
+API_KEY = "2ab1eb65a8b94e8ea240487d86d1e6a5"
 BASE_URL = "https://api.football-data.org/v4"
 
-# --- ฟังก์ชันดึงข้อมูลจาก API ---
 def call_api(endpoint):
     headers = {'X-Auth-Token': API_KEY}
     try:
         response = requests.get(f"{BASE_URL}/{endpoint}", headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 429:
-            st.error("⚠️ Rate Limit: คุณดึงข้อมูลบ่อยเกินไป (Free Tier จำกัดจำนวนครั้งต่อนาที)")
-            return None
-        else:
-            st.error(f"❌ Error {response.status_code}: ไม่สามารถดึงข้อมูลได้")
-            return None
-    except Exception as e:
-        st.error(f"📡 Connection Error: {e}")
+        if response.status_code == 200: return response.json()
         return None
+    except: return None
 
-# --- 1. ดึงตารางคะแนนสดเพื่อคำนวณ Strength ---
 @st.cache_data(ttl=3600)
-def get_league_stats():
-    data = call_api("competitions/PL/standings")
-    if data and 'standings' in data:
-        table = data['standings'][0]['table']
-        rows = []
-        for team in table:
-            rows.append({
-                'TeamName': team['team']['shortName'],
-                'Played': team['playedGames'],
-                'GF': team['goalsFor'],
-                'GA': team['goalsAgainst'],
-                'Pts': team['points']
-            })
-        df = pd.DataFrame(rows)
-        
-        # ป้องกันการหารด้วยศูนย์กรณีเริ่มฤดูกาล
-        df['Played'] = df['Played'].replace(0, 1)
-        
-        # คำนวณค่าเฉลี่ยประตูต่อเกมของทั้งลีก
-        avg_gf = df['GF'].sum() / df['Played'].sum()
-        
-        # คำนveณความแข็งแกร่ง (Strength)
-        df['Att_Strength'] = (df['GF'] / df['Played']) / avg_gf
-        df['Def_Strength'] = (df['GA'] / df['Played']) / avg_gf
-        
-        return df, avg_gf
-    return None, 1.5
+def get_data():
+    s_data = call_api("competitions/PL/standings")
+    f_data = call_api("competitions/PL/matches?status=SCHEDULED")
+    
+    if s_data and 'standings' in s_data:
+        table = s_data['standings'][0]['table']
+        df = pd.DataFrame([{
+            'Name': t['team']['shortName'],
+            'P': t['playedGames'],
+            'GF': t['goalsFor'],
+            'GA': t['goalsAgainst']
+        } for t in table])
+        df['P'] = df['P'].replace(0, 1)
+        avg_gf = df['GF'].sum() / df['P'].sum()
+        df['Att'] = (df['GF'] / df['P']) / avg_gf
+        df['Def'] = (df['GA'] / df['P']) / avg_gf
+        return df, avg_gf, f_data.get('matches', [])
+    return None, 1.5, []
 
-# --- 2. ดึงโปรแกรมการแข่งขันที่กำลังจะมาถึง ---
-@st.cache_data(ttl=3600)
-def get_upcoming_matches():
-    data = call_api("competitions/PL/matches?status=SCHEDULED")
-    if data and 'matches' in data:
-        matches = data['matches']
-        match_list = []
-        for m in matches:
-            match_list.append({
-                'Home': m['homeTeam']['shortName'],
-                'Away': m['awayTeam']['shortName'],
-                'Date': m['utcDate']
-            })
-        return match_list
-    return []
-
-# --- 3. ฟังก์ชันคำนวณผลด้วย Poisson ---
-def predict_score(home_name, away_name, stats_df, avg_league_goals):
+def predict(h, a, df, avg):
     try:
-        # ดึงค่าพลังของทั้งสองทีม
-        h_stat = stats_df[stats_df['TeamName'] == home_name].iloc[0]
-        a_stat = stats_df[stats_df['TeamName'] == away_name].iloc[0]
-        
-        # สูตร Expected Goals (xG)
-        exp_h = h_stat['Att_Strength'] * a_stat['Def_Strength'] * avg_league_goals
-        exp_a = a_stat['Att_Strength'] * h_stat['Def_Strength'] * avg_league_goals
-        
-        # คำนวณความน่าจะเป็น 0-7 ประตู
-        h_probs = [poisson.pmf(i, exp_h) for i in range(8)]
-        a_probs = [poisson.pmf(i, exp_a) for i in range(8)]
-        prob_matrix = np.outer(h_probs, a_probs)
-        
-        p_home = np.sum(np.tril(prob_matrix, -1))
-        p_draw = np.sum(np.diag(prob_matrix))
-        p_away = np.sum(np.triu(prob_matrix, 1))
-        
-        # สกอร์ที่มีโอกาสเกิดสูงสุด
-        res_h, res_a = np.unravel_index(prob_matrix.argmax(), prob_matrix.shape)
-        
-        return exp_h, exp_a, p_home, p_draw, p_away, f"{res_h}-{res_a}"
-    except:
-        return 0, 0, 0, 0, 0, "N/A"
+        hs, as_ = df[df['Name']==h].iloc[0], df[df['Name']==a].iloc[0]
+        ex_h, ex_a = hs['Att']*as_['Def']*avg, as_['Att']*hs['Def']*avg
+        probs = np.outer([poisson.pmf(i, ex_h) for i in range(7)], [poisson.pmf(i, ex_a) for i in range(7)])
+        return ex_h, ex_a, np.sum(np.tril(probs, -1)), np.sum(np.diag(probs)), np.sum(np.triu(probs, 1)), f"{probs.argmax()//7}-{probs.argmax()%7}"
+    except: return 0,0,0,0,0,"N/A"
 
-# --- ส่วนการแสดงผลบนหน้าเว็บ ---
-stats, avg_g = get_league_stats()
-fixtures = get_upcoming_matches()
+# --- แสดงผล ---
+st.write("# ⚽ PL GURU PREDICT")
+
+stats, avg_g, fixtures = get_data()
 
 if stats is not None:
-    # Sidebar: ตารางค่าพลัง
-    st.sidebar.header("📊 Team Strength Index")
-    st.sidebar.write("อ้างอิงจากฟอร์มปัจจุบัน")
-    st.sidebar.dataframe(
-        stats[['TeamName', 'Att_Strength', 'Def_Strength']].sort_values('Att_Strength', ascending=False),
-        hide_index=True
-    )
-
-    # หน้าหลัก: รายการแข่ง
-    if fixtures:
-        st.header(f"📅 วิเคราะห์โปรแกรมล่วงหน้า ({len(fixtures)} คู่)")
-        
-        # วนลูปสร้างการ์ดวิเคราะห์รายคู่
-        for match in fixtures:
-            xh, xa, ph, pd, pa, score = predict_score(match['Home'], match['Away'], stats, avg_g)
-            
-            with st.expander(f"🏟️ {match['Home']} vs {match['Away']} ({match['Date'][:10]})"):
-                c1, c2, c3 = st.columns(3)
-                c1.metric(f"{match['Home']} ชนะ", f"{ph*100:.1f}%")
-                c2.metric("เสมอ", f"{pd*100:.1f}%")
-                c3.metric(f"{match['Away']} ชนะ", f"{pa*100:.1f}%")
-                
-                st.write(f"**🎯 สกอร์ที่น่าจะเป็นที่สุด:** :green[{score}]")
-                st.write(f"**💡 บทวิเคราะห์:** ค่า xG คาดการณ์ {match['Home']} **{xh:.2f}** และ {match['Away']} **{xa:.2f}**")
+    if not fixtures:
+        st.info("ไม่มีคู่แข่งสัปดาห์นี้")
     else:
-        st.info("ขณะนี้ไม่มีโปรแกรมการแข่งขันพรีเมียร์ลีกที่บันทึกอยู่ในระบบ")
-else:
-    st.warning("กรุณารอครู่หนึ่ง ระบบกำลังเชื่อมต่อข้อมูลจาก API...")
+        for m in fixtures:
+            h, a = m['homeTeam']['shortName'], m['awayTeam']['shortName']
+            xh, xa, ph, pd, pa, score = predict(h, a, stats, avg_g)
+            
+            # การ์ดแสดงผลรายคู่
+            with st.expander(f"**{h} vs {a}**", expanded=True):
+                # แถวบน: เปอร์เซ็นต์ชนะ
+                c1, c2, c3 = st.columns(3)
+                c1.metric("🏠 Win", f"{ph*100:.0f}%")
+                c2.metric("🤝 Draw", f"{pd*100:.0f}%")
+                c3.metric("🚀 Win", f"{pa*100:.0f}%")
+                
+                # แถวล่าง: ผลทำนาย
+                st.markdown(f"""
+                <div style="text-align: center; padding: 10px; background: #3d0158; color: white; border-radius: 8px; margin-top: 10px;">
+                    <span style="font-size: 14px;">🎯 สกอร์ที่คาด:</span><br>
+                    <b style="font-size: 22px;">{score}</b>
+                </div>
+                """, unsafe_content_allowed=True)
+                
+                st.caption(f"xG: {xh:.1f} - {xa:.1f} | เตะวันที่: {m['utcDate'][:10]}")
 
-st.divider()
-st.caption("Data provided by Football-Data.org API. คำนวณผลด้วยหลักการทางสถิติ Poisson Distribution")
+    # แถบด้านข้างสำหรับดูตารางแบบย่อ
+    with st.sidebar:
+        st.header("🏆 Top Attackers")
+        st.dataframe(stats.sort_values('Att', ascending=False)[['Name', 'GF']].head(5), hide_index=True)
+else:
+    st.error("API Error - กรุณารีเฟรช")
