@@ -7,19 +7,7 @@ import requests
 # --- ตั้งค่าหน้าจอ ---
 st.set_page_config(page_title="PL GURU", layout="centered", page_icon="⚽")
 
-# --- วิธีแก้ Error: เขียน CSS แบบปลอดภัยต่อ Python 3.13 ---
-css = """
-<style>
-    .main { background-color: #f0f2f6; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center; }
-    [data-testid="stExpander"] { border: none !important; box-shadow: 0 2px 12px rgba(0,0,0,0.08); border-radius: 15px; margin-bottom: 20px; background: white; }
-    h1 { font-size: 28px !important; text-align: center; color: #3d0158; padding-bottom: 20px; }
-    .predict-box { text-align: center; padding: 15px; background: linear-gradient(90deg, #3d0158, #e90052); color: white; border-radius: 12px; margin-top: 15px; }
-</style>
-"""
-st.markdown(css, unsafe_content_allowed=True)
-
-# --- ข้อมูล API (Key ของคุณ) ---
+# --- ข้อมูล API ---
 API_KEY = "2ab1eb65a8b94e8ea240487d86d1e6a5"
 BASE_URL = "https://api.football-data.org/v4"
 
@@ -75,7 +63,8 @@ def predict_match(h_name, a_name, df, avg_league):
         return 0, 0, 0, 0, 0, "N/A"
 
 # --- MAIN APP ---
-st.markdown("<h1>⚽ PREMIER GURU</h1>", unsafe_content_allowed=True)
+st.title("⚽ PREMIER GURU")
+st.write("วิเคราะห์ผลบอลพรีเมียร์ลีกอัตโนมัติ")
 
 stats, avg_g, fixtures = get_all_data()
 
@@ -83,24 +72,24 @@ if stats is not None:
     if not fixtures:
         st.info("ไม่มีโปรแกรมการแข่งขันเร็วๆ นี้")
     else:
-        st.write(f"### วิเคราะห์ {len(fixtures)} คู่ถัดไป")
+        st.subheader(f"📅 วิเคราะห์ {len(fixtures)} คู่ถัดไป")
+        
         for m in fixtures:
             h, a = m['homeTeam']['shortName'], m['awayTeam']['shortName']
             xh, xa, ph, pd, pa, score = predict_match(h, a, stats, avg_g)
             
-            with st.expander(f"**{h} vs {a}**", expanded=True):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("🏠 Home", f"{ph*100:.0f}%")
-                c2.metric("🤝 Draw", f"{pd*100:.0f}%")
-                c3.metric("🚀 Away", f"{pa*100:.0f}%")
+            # ใช้ st.container แทน CSS เพื่อความปลอดภัย
+            with st.container(border=True):
+                st.markdown(f"### **{h} vs {a}**")
                 
-                html_card = f"""
-                <div class="predict-box">
-                    <span style="font-size: 14px; opacity: 0.8;">🎯 สกอร์ที่คาด:</span><br>
-                    <b style="font-size: 26px;">{score}</b>
-                </div>
-                """
-                st.markdown(html_card, unsafe_content_allowed=True)
-                st.caption(f"📅 {m['utcDate'][:10]} | xG: {xh:.1f} - {xa:.1f}")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("🏠 เหย้า", f"{ph*100:.0f}%")
+                col2.metric("🤝 เสมอ", f"{pd*100:.0f}%")
+                col3.metric("🚀 เยือน", f"{pa*100:.0f}%")
+                
+                # แสดงสกอร์แบบเด่นๆ ด้วย st.success
+                st.success(f"🎯 **สกอร์ที่คาด: {score}**")
+                
+                st.caption(f"วันที่เตะ: {m['utcDate'][:10]} | xG: {xh:.1f} - {xa:.1f}")
 else:
-    st.error("ไม่สามารถเชื่อมต่อข้อมูลได้ กรุณาเช็คอินเทอร์เน็ตหรือ API Key")
+    st.error("ไม่สามารถเชื่อมต่อข้อมูลได้ กรุณาลองใหม่อีกครั้ง")
