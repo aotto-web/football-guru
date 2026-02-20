@@ -4,97 +4,125 @@ import numpy as np
 import requests
 from io import StringIO
 from scipy.stats import poisson
-from sklearn.ensemble import RandomForestRegressor
+from datetime import datetime
 
-# --- CONFIG ---
-st.set_page_config(page_title="MAHATEP AI GOD MODE", layout="wide")
+# --- CONFIG & UI ---
+st.set_page_config(page_title="MAHATEP AI - PREDICTOR", layout="wide")
 
-# --- 1. DATA ENGINE (ดึงข้อมูลทุกลีก) ---
-@st.cache_data(ttl=3600)
-def get_data():
-    leagues = {'E0': 'Premier League', 'SP1': 'La Liga', 'D1': 'Bundesliga'}
-    dfs = []
-    for code, name in leagues.items():
-        url = f"https://www.football-data.co.uk/mmz4281/2425/{code}.csv"
-        try:
-            df = pd.read_csv(url)
-            df['League'] = name
-            dfs.append(df)
-        except: continue
-    return pd.concat(dfs)
-
-# --- 2. PREDICTION LOGIC (ทายสกอร์) ---
-def predict_score(home_team, away_team, data):
-    # คำนวณค่าเฉลี่ยประตู (Strength)
-    avg_home_goals = data['FTHG'].mean()
-    avg_away_goals = data['FTAG'].mean()
-    
-    # ความแข็งแกร่งทีมเหย้า
-    home_att = data[data['HomeTeam'] == home_team]['FTHG'].mean() / avg_home_goals
-    home_def = data[data['HomeTeam'] == home_team]['FTAG'].mean() / avg_away_goals
-    
-    # ความแข็งแกร่งทีมเยือน
-    away_att = data[data['AwayTeam'] == away_team]['FTAG'].mean() / avg_away_goals
-    away_def = data[data['AwayTeam'] == away_team]['FTHG'].mean() / avg_home_goals
-    
-    # คำนวณ Expected Goals (xG)
-    exp_home = home_att * away_def * avg_home_goals
-    exp_away = away_att * home_def * avg_away_goals
-    
-    return round(exp_home), round(exp_away), exp_home, exp_away
-
-# --- 3. UI DISPLAY ---
-st.title("🔥 มหาเทพ AI: ระบบวิเคราะห์สกอร์และตรวจสอบความแม่นยำ")
-
-data = get_data()
-league_list = data['League'].unique()
-sel_league = st.selectbox("เลือกเลือกลีก", league_list)
-
-filtered_data = data[data['League'] == sel_league]
-
-# --- ส่วนการแสดงผล: วิเคราะห์คู่ถัดไป ---
-st.header("🎯 ทายผลการแข่งขัน (Upcoming)")
-teams = sorted(filtered_data['HomeTeam'].unique())
-col1, col2 = st.columns(2)
-with col1: h_team = st.selectbox("เจ้าบ้าน", teams, index=0)
-with col2: a_team = st.selectbox("ทีมเยือน", teams, index=1)
-
-if st.button("คำนวณสกอร์"):
-    h_s, a_s, h_xg, a_xg = predict_score(h_team, a_team, filtered_data)
-    st.success(f"🤖 AI ทายสกอร์: {h_team} {h_s} - {a_s} {a_team}")
-    st.info(f"📊 ค่า xG (ละเอียด): {h_team} ({h_xg:.2f}) vs {a_team} ({a_xg:.2f})")
-
-# --- 4. BACKTESTING (ส่วนแสดงความผิดพลาดหลังบอลเตะ) ---
-st.markdown("---")
-st.header("📉 ตรวจสอบความผิดพลาด (Post-Match Analysis)")
-st.write("เปรียบเทียบผลที่ AI ทายไว้ กับ ผลการแข่งขันจริงที่เกิดขึ้น")
-
-# จำลองการตรวจสอบย้อนหลัง 10 นัดล่าสุด
-recent_matches = filtered_data.tail(10).copy()
-comparison = []
-
-for _, row in recent_matches.iterrows():
-    # ลองให้ AI ทายผลนัดที่เตะไปแล้ว (โดยใช้ Data ก่อนหน้านั้น - ในที่นี้ใช้ Data ปัจจุบันเพื่อ Demo)
-    p_h, p_a, _, _ = predict_score(row['HomeTeam'], row['AwayTeam'], filtered_data)
-    
-    # คำนวณ Error (ความผิดพลาด)
-    error_h = abs(p_h - row['FTHG'])
-    error_a = abs(p_a - row['FTAG'])
-    total_error = error_h + error_a
-    
-    comparison.append({
-        "คู่แข่งขัน": f"{row['HomeTeam']} vs {row['AwayTeam']}",
-        "ผลจริง": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
-        "AI ทาย": f"{p_h}-{p_a}",
-        "ความคลาดเคลื่อน": "แม่นยำมาก" if total_error == 0 else ("ใกล้เคียง" if total_error <= 1 else "พลาด")
-    })
-
-st.table(pd.DataFrame(comparison))
-
-# --- CSS สวยๆ ---
 st.markdown("""
 <style>
-    .stButton>button { width: 100%; background-color: #00ff88; color: black; font-weight: bold; border-radius: 10px; }
-    table { background-color: #1d2129; color: white; border-radius: 10px; }
+    .stApp { background-color: #0e1117; color: white; }
+    .league-card { background: #1d2129; padding: 15px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #00ff88; }
+    .match-row { display: grid; grid-template-columns: 100px 1.5fr 1fr 1.5fr 1.5fr; 
+                background: #262c36; padding: 10px; margin-bottom: 5px; border-radius: 5px; align-items: center; }
+    .error-badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+    .perfect { background: #00ff88; color: black; }
+    .near { background: #ffdd00; color: black; }
+    .miss { background: #ff006e; color: white; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- 1. DATA ENGINE ---
+LEAGUES = {
+    "Premier League": "E0",
+    "La Liga": "SP1",
+    "Bundesliga": "D1",
+    "Serie A": "I1",
+    "Ligue 1": "F1"
+}
+
+@st.cache_data(ttl=3600)
+def load_data(league_code):
+    url = f"https://www.football-data.co.uk/mmz4281/2425/{league_code}.csv"
+    try:
+        df = pd.read_csv(url)
+        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
+        return df
+    except: return None
+
+# --- 2. PREDICTION LOGIC (POISSON MODEL) ---
+def get_score_prediction(home_team, away_team, df):
+    # คำนวณความแข็งแกร่ง (Strength)
+    avg_h_goals = df['FTHG'].mean()
+    avg_a_goals = df['FTAG'].mean()
+    
+    # ความสามารถในการทำประตูและเสียประตู
+    h_att = df[df['HomeTeam'] == home_team]['FTHG'].mean() / avg_h_goals
+    h_def = df[df['HomeTeam'] == home_team]['FTAG'].mean() / avg_a_goals
+    a_att = df[df['AwayTeam'] == away_team]['FTAG'].mean() / avg_a_goals
+    a_def = df[df['AwayTeam'] == away_team]['FTHG'].mean() / avg_h_goals
+    
+    # Expected Goals (xG)
+    exp_h = h_att * a_def * avg_h_goals
+    exp_a = a_att * h_def * avg_a_goals
+    
+    # ทายสกอร์ที่มีโอกาสเกิดสูงสุด
+    pred_h = np.argmax([poisson.pmf(i, exp_h) for i in range(6)])
+    pred_a = np.argmax([poisson.pmf(i, exp_a) for i in range(6)])
+    
+    return pred_h, pred_a, exp_h, exp_a
+
+# --- 3. MAIN DISPLAY ---
+st.title("⚽ มหาเทพ AI: วิเคราะห์สกอร์ & ตรวจสอบความแม่นยำ")
+
+# วนลูปตามลำดับความสำคัญ (Premier League ก่อน)
+ordered_leagues = ["Premier League"] + [l for l in LEAGUES.keys() if l != "Premier League"]
+
+for league_name in ordered_leagues:
+    df = load_data(LEAGUES[league_name])
+    if df is None: continue
+    
+    with st.expander(f"🏆 {league_name}", expanded=(league_name == "Premier League")):
+        # --- ส่วนที่ 1: วิเคราะห์แมตช์ล่าสุด (Checking Error) ---
+        st.subheader("📊 ตรวจสอบความแม่นยำล่าสุด (Backtest)")
+        recent_matches = df.tail(5).copy() # ตรวจสอบ 5 นัดล่าสุดที่จบไปแล้ว
+        
+        for _, row in recent_matches.iterrows():
+            # ลองใช้ AI ทายผลนัดที่จบไปแล้ว
+            p_h, p_a, _, _ = get_score_prediction(row['HomeTeam'], row['AwayTeam'], df)
+            
+            # คำนวณความผิดพลาด
+            actual = f"{int(row['FTHG'])}-{int(row['FTAG'])}"
+            pred = f"{p_h}-{p_a}"
+            total_error = abs(p_h - row['FTHG']) + abs(p_a - row['FTAG'])
+            
+            if total_error == 0: status, cls = "เป๊ะ!", "perfect"
+            elif total_error <= 1: status, cls = "ใกล้เคียง", "near"
+            else: status, cls = "พลาด", "miss"
+            
+            st.markdown(f"""
+            <div class="match-row">
+                <div style="font-size:12px; color:#888;">{row['Date'].strftime('%d/%m')}</div>
+                <div style="text-align:right;">{row['HomeTeam']}</div>
+                <div style="text-align:center; font-weight:bold; color:#00ff88;">{actual}</div>
+                <div style="text-align:left;">{row['AwayTeam']}</div>
+                <div>AI ทาย: <b>{pred}</b> <span class="error-badge {cls}">{status}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # --- ส่วนที่ 2: ทายผลคู่ถัดไป (Predictions) ---
+        st.subheader("🎯 ทายผลคู่ถัดไป")
+        teams = sorted(df['HomeTeam'].unique())
+        c1, c2, c3 = st.columns([2,2,1])
+        with c1: h_t = st.selectbox(f"เจ้าบ้าน ({league_name})", teams, key=f"h_{league_name}")
+        with c2: a_t = st.selectbox(f"ทีมเยือน ({league_name})", teams, key=f"a_{league_name}")
+        with c3:
+            if st.button("วิเคราะห์", key=f"btn_{league_name}"):
+                p_h, p_a, x_h, x_g = get_score_prediction(h_t, a_t, df)
+                st.markdown(f"""
+                <div style="background:#00ff8822; padding:10px; border-radius:5px; border:1px solid #00ff88; text-align:center;">
+                    <h2 style="margin:0; color:#00ff88;">{p_h} - {p_a}</h2>
+                    <p style="margin:0; font-size:12px;">(xG: {x_h:.2f} - {x_g:.2f})</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+# --- 4. การเชื่อมต่อกับ PHP ---
+with st.sidebar:
+    st.header("💻 สำหรับนำไปใช้ใน PHP")
+    st.info("""
+    เพื่อให้ PHP ใช้งานได้ คุณควร:
+    1. รัน Python เพื่อดึงค่า xG และทายสกอร์
+    2. บันทึกลง MySQL (Table: predictions)
+    3. ใช้ PHP ดึงข้อมูลมาแสดงผล (SELECT)
+    4. เมื่อบอลเตะจบ อัปเดตผลจริง (Actual) แล้วเขียน PHP คำนวณ Error (pred - actual)
+    """)
