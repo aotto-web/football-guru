@@ -4,72 +4,98 @@ import numpy as np
 from scipy.stats import poisson
 
 # --- การตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="PL Analysis - LiveScore Style", layout="wide")
-st.title("⚽ Premier League Match Analysis (Live Data 2026)")
+st.set_page_config(page_title="PL Auto-Predictor", layout="wide")
+st.title("⚽ Premier League Real-Time Predictor")
+st.write("ดึงข้อมูลตารางแข่งและคำนวณอัตโนมัติจากสถิติล่าสุด")
 
-# --- 1. ข้อมูลสถิติทีม (อัปเดตฟอร์มล่าสุดกุมภาพันธ์ 2026) ---
-# ค่า Offense (บุก) และ Defense (รับ) ยิ่งบุกสูงยิ่งดี ยิ่งรับต่ำยิ่งเหนียว
-teams_data = {
-    'Team': [
-        'Arsenal', 'Man City', 'Liverpool', 'Man Utd', 'Chelsea', 
-        'Aston Villa', 'Newcastle', 'Spurs', 'Everton', 'West Ham',
-        'Brentford', 'Brighton', 'Bournemouth', 'Fulham', 'Leeds', 
-        'Nottm Forest', 'Crystal Palace', 'Burnley', 'Sunderland', 'Wolves'
-    ],
-    'Offense': [1.28, 1.25, 1.18, 1.10, 1.12, 1.05, 1.02, 1.08, 0.90, 0.92, 1.01, 0.95, 0.96, 0.94, 0.88, 0.85, 0.84, 0.80, 0.78, 0.72],
-    'Defense': [0.72, 0.78, 0.82, 0.92, 0.98, 0.90, 1.05, 1.02, 1.04, 1.15, 1.05, 1.10, 1.12, 1.08, 1.18, 1.22, 1.16, 1.28, 1.25, 1.40]
-}
-df_stats = pd.DataFrame(teams_data)
-
-# --- 2. ฟังก์ชันวิเคราะห์ Poisson ---
-def analyze_match(home, away):
-    h_stat = df_stats[df_stats['Team'] == home].iloc[0]
-    a_stat = df_stats[df_stats['Team'] == away].iloc[0]
-    
-    # คำนวณ xG (ค่าเฉลี่ยประตูที่คาดหวัง)
-    # สมมติค่าเฉลี่ยลีก: เหย้า 1.55, เยือน 1.30
-    exp_h = h_stat['Offense'] * a_stat['Defense'] * 1.55
-    exp_a = a_stat['Offense'] * h_stat['Defense'] * 1.30
-    
-    # สร้าง Matrix ความน่าจะเป็น (0-6 ประตู)
-    h_prob = [poisson.pmf(i, exp_h) for i in range(7)]
-    a_prob = [poisson.pmf(i, exp_a) for i in range(7)]
-    matrix = np.outer(h_prob, a_prob)
-    
-    prob_home = np.sum(np.tril(matrix, -1))
-    prob_draw = np.sum(np.diag(matrix))
-    prob_away = np.sum(np.triu(matrix, 1))
-    
-    # สกอร์ที่น่าจะเป็นที่สุด
-    hp, ap = np.unravel_index(matrix.argmax(), matrix.shape)
-    
-    return exp_h, exp_a, prob_home, prob_draw, prob_away, f"{hp}-{ap}"
-
-# --- 3. โปรแกรมแข่งจริงจาก LiveScore (21-23 ก.พ. 2026) ---
-st.header("📅 วิเคราะห์โปรแกรมการแข่งขันสัปดาห์นี้")
-
-fixtures = [
-    {"time": "21 ก.พ. 19:30", "home": "Aston Villa", "away": "Leeds"},
-    {"time": "21 ก.พ. 22:00", "home": "Chelsea", "away": "Burnley"},
-    {"time": "21 ก.พ. 22:00", "home": "West Ham", "away": "Bournemouth"},
-    {"time": "22 ก.พ. 00:30", "home": "Man City", "away": "Newcastle"}, # คู่ใหญ่
-    {"time": "22 ก.พ. 21:00", "home": "Spurs", "away": "Arsenal"},     # North London Derby
-    {"time": "23 ก.พ. 03:00", "home": "Everton", "away": "Man Utd"}
-]
-
-for match in fixtures:
-    xh, xa, ph, pd, pa, score = analyze_match(match['home'], match['away'])
-    
-    with st.expander(f"⏰ {match['time']} | {match['home']} vs {match['away']}"):
-        c1, c2, c3 = st.columns(3)
-        c1.metric(f"โอกาส {match['home']} ชนะ", f"{ph*100:.1f}%")
-        c2.metric("โอกาสเสมอ", f"{pd*100:.1f}%")
-        c3.metric(f"โอกาส {match['away']} ชนะ", f"{pa*100:.1f}%")
+# --- 1. ฟังก์ชันดึงข้อมูลตารางคะแนนสด (เพื่อหาค่าพลังทีม) ---
+@st.cache_data(ttl=3600) # เก็บข้อมูลไว้ 1 ชม. จะได้ไม่ดึงบ่อยจนโดนบล็อก
+def get_live_stats():
+    try:
+        # ดึงตารางคะแนนจาก FBRef (แหล่งข้อมูลสถิติฟุตบอลที่เสถียรที่สุดสำหรับ Python)
+        url = "https://www.worldfootball.net/premier_league_2025_2026/table/"
+        tables = pd.read_html(url)
+        df = tables[0]
         
-        st.write(f"**การวิเคราะห์เชิงลึก:**")
-        st.write(f"- ค่า xG คาดการณ์: {match['home']} {xh:.2f} | {match['away']} {xa:.2f}")
-        st.write(f"- สกอร์ที่มีโอกาสเกิดสูงสุด: **{score}**")
+        # จัดรูปแบบข้อมูล
+        df = df[['#', 'Team', 'M.', 'Goals', 'Pts']]
+        # แยกประตูได้-เสียออกจากกัน (เช่น 45:20)
+        df[['Scored', 'Conceded']] = df['Goals'].str.split(':', expand=True).astype(int)
+        
+        # คำนวณค่าเฉลี่ยของลีก
+        avg_scored = df['Scored'].mean()
+        avg_conceded = df['Conceded'].mean()
+        
+        # คำนวณ Offense และ Defense Strength ของแต่ละทีม
+        df['Offense'] = df['Scored'] / avg_scored
+        df['Defense'] = df['Conceded'] / avg_conceded
+        
+        return df, avg_scored / 2, avg_conceded / 2 # ส่งคืนค่าเฉลี่ยต่อทีม
+    except Exception as e:
+        st.error(f"ไม่สามารถดึงข้อมูลสถิติได้: {e}")
+        return None, 1.5, 1.3
 
-# --- ส่วนท้าย ---
-st.divider()
-st.caption("อ้างอิงโปรแกรมการแข่งขันจาก LiveScore และคำนวณผลตามสถิติทีมปัจจุบัน")
+# --- 2. ฟังก์ชันดึงโปรแกรมการแข่งขัน (Fixtures) ---
+@st.cache_data(ttl=3600)
+def get_fixtures():
+    try:
+        # ดึงโปรแกรมการแข่งขัน
+        url = "https://www.worldfootball.net/schedule/eng-premier-league-2025-2026-spieltag/25/" # Spieltag คือนัดที่
+        tables = pd.read_html(url)
+        fixtures_df = tables[1] # ตารางโปรแกรมมักอยู่ใน index 1 หรือ 2
+        return fixtures_df
+    except:
+        return None
+
+# --- 3. ฟังก์ชันคำนวณ Poisson ---
+def predict_match(home_team, away_team, stats_df, avg_h, avg_a):
+    try:
+        h_stat = stats_df[stats_df['Team'].str.contains(home_team)].iloc[0]
+        a_stat = stats_df[stats_df['Team'].str.contains(away_team)].iloc[0]
+        
+        exp_h = h_stat['Offense'] * a_stat['Defense'] * avg_h
+        exp_a = a_stat['Offense'] * h_stat['Defense'] * avg_a
+        
+        h_prob = [poisson.pmf(i, exp_h) for i in range(7)]
+        a_prob = [poisson.pmf(i, exp_a) for i in range(7)]
+        m = np.outer(h_prob, a_prob)
+        
+        ph = np.sum(np.tril(m, -1))
+        pd = np.sum(np.diag(m))
+        pa = np.sum(np.triu(m, 1))
+        hp, ap = np.unravel_index(m.argmax(), m.shape)
+        
+        return exp_h, exp_a, ph, pd, pa, f"{hp}-{ap}"
+    except:
+        return 0, 0, 0, 0, 0, "N/A"
+
+# --- ส่วนหลักของโปรแกรม ---
+df_stats, avg_h, avg_a = get_live_stats()
+fixtures = get_fixtures()
+
+if df_stats is not None:
+    st.sidebar.header("📊 อันดับตารางคะแนนปัจจุบัน")
+    st.sidebar.dataframe(df_stats[['Team', 'Pts', 'Offense', 'Defense']], hide_index=True)
+
+    st.header("📅 โปรแกรมการแข่งขันนัดถัดไป")
+    
+    # วนลูปแสดงผลทุกคู่ที่ดึงมาได้
+    for index, row in fixtures.iterrows():
+        # ตรวจสอบว่าบรรทัดนั้นเป็นข้อมูลคู่แข่งจริงหรือไม่ (ข้อมูลเว็บมักมีบรรทัดว่าง)
+        if isinstance(row[2], str) and ' - ' not in row[2]: 
+            home = row[2]
+            away = row[4]
+            
+            xh, xa, ph, pd, pa, score = predict_match(home, away, df_stats, avg_h, avg_a)
+            
+            with st.expander(f"🏟️ {home} vs {away}"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric(f"{home} ชนะ", f"{ph*100:.1f}%")
+                c2.metric("เสมอ", f"{pd*100:.1f}%")
+                c3.metric(f"{away} ชนะ", f"{pa*100:.1f}%")
+                st.write(f"สกอร์ที่คาด: **{score}** (xG: {xh:.2f} - {xa:.2f})")
+
+else:
+    st.warning("กำลังรอข้อมูลจากเซิร์ฟเวอร์... กรุณารีเฟรชหน้าจอ")
+
+st.info("💡 ระบบนี้ดึงข้อมูลจาก worldfootball.net อัตโนมัติ ทุกครั้งที่มีการแข่งขันนัดใหม่ สถิติจะถูกคำนวณใหม่ทันที")
