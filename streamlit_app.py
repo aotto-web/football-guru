@@ -6,150 +6,113 @@ from io import StringIO
 from scipy.stats import poisson
 from datetime import datetime
 
-# --- 1. SETTINGS & STYLES ---
-st.set_page_config(page_title="PREMIER LEAGUE GOD-MODE AI", layout="wide")
+# --- 1. SETUP & STYLE ---
+st.set_page_config(page_title="PL GOD-MODE PREDICTOR", layout="wide")
 
 st.markdown("""
 <style>
-    .main { background-color: #0e1117; }
-    .stMetric { background-color: #1d2129; padding: 15px; border-radius: 10px; border: 1px solid #333; }
-    .match-card {
-        background: linear-gradient(135deg, #1d2129 0%, #111418 100%);
-        padding: 20px; border-radius: 15px; border-left: 6px solid #3d195d;
-        margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    .match-row {
+        display: grid; grid-template-columns: 120px 1.5fr 1fr 1.5fr 150px;
+        background: #1d2129; padding: 12px; margin-bottom: 5px;
+        border-radius: 8px; align-items: center; border-left: 5px solid #3d195d;
     }
-    .pl-header { color: #3d195d; background: #00ff88; padding: 10px; border-radius: 5px; font-weight: bold; text-align: center; }
-    .status-win { color: #00ff88; font-weight: bold; }
-    .status-fail { color: #ff006e; font-weight: bold; }
+    .date-text { color: #888; font-size: 13px; }
+    .team-name { font-weight: bold; font-size: 16px; }
+    .score-pred { color: #00ff88; font-size: 18px; font-weight: bold; text-align: center; }
+    .conf-tag { background: #3d195d; color: white; padding: 2px 10px; border-radius: 15px; font-size: 11px; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. DATA ENGINE (Premier League Focus) ---
+# --- 2. DATA ENGINE ---
 @st.cache_data(ttl=3600)
-def fetch_pl_data():
-    # ดึงข้อมูลจาก Football-Data.co.uk (E0 = Premier League)
-    url = "https://www.football-data.co.uk/mmz4281/2425/E0.csv"
+def load_data():
+    # ข้อมูลสถิติย้อนหลังเพื่อ Train AI
+    url_stats = "https://www.football-data.co.uk/mmz4281/2425/E0.csv"
+    # ข้อมูลตารางแข่งล่วงหน้า (Fixtures)
+    url_fixtures = "https://fixturedownload.com/feed/json/epl-2025"
+    
     try:
-        r = requests.get(url)
-        df = pd.read_csv(StringIO(r.text))
-        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
-        return df
+        stats_df = pd.read_csv(url_stats)
+        fix_res = requests.get(url_fixtures)
+        fix_df = pd.DataFrame(fix_res.json())
+        return stats_df, fix_df
     except:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
-# --- 3. AI CORE LOGIC (Poisson + Strength Analysis) ---
-def get_ultimate_prediction(home, away, df):
-    # คำนวณค่าเฉลี่ยประตูทั้งลีค
-    avg_home_g = df['FTHG'].mean()
-    avg_away_g = df['FTAG'].mean()
-
-    # คำนวณ Attack/Defense Strength (10 นัดล่าสุด)
-    h_data = df[df['HomeTeam'] == home].tail(10)
-    a_data = df[df['AwayTeam'] == away].tail(10)
-    
-    h_att = h_data['FTHG'].mean() / avg_home_g
-    h_def = h_data['FTAG'].mean() / avg_away_g
-    a_att = a_data['FTAG'].mean() / avg_away_g
-    a_def = a_data['FTHG'].mean() / avg_home_g
-
-    # Expected Goals (xG)
-    exp_h = h_att * a_def * avg_home_g
-    exp_a = a_att * h_def * avg_away_g
-
-    # หาผลสกอร์ที่มีความน่าจะเป็นสูงสุด (Most Likely Score)
-    probs_h = [poisson.pmf(i, exp_h) for i in range(6)]
-    probs_a = [poisson.pmf(i, exp_a) for i in range(6)]
-    
-    pred_h = np.argmax(probs_h)
-    pred_a = np.argmax(probs_a)
-    
-    # ความมั่นใจ (Confidence)
-    confidence = (max(probs_h) * max(probs_a)) * 100
-    
-    return pred_h, pred_a, exp_h, exp_a, confidence
-
-# --- 4. MAIN INTERFACE ---
-st.markdown("<h1 style='text-align: center; color: #00ff88;'>🏴󠁧󠁢󠁥󠁮󠁧󠁿 PREMIER LEAGUE GOD-MODE</h1>", unsafe_allow_html=True)
-st.markdown("<div class='pl-header'>วิเคราะห์เจาะลึกทุกลมหายใจพรีเมียร์ลีก</div>", unsafe_allow_html=True)
-
-df_pl = fetch_pl_data()
-
-if not df_pl.empty:
-    tab1, tab2, tab3 = st.tabs(["🎯 ทายผลนัดถัดไป", "📉 ตรวจสอบความแม่นยำ (Error)", "📊 สถิติลีค"])
-
-    with tab1:
-        st.subheader("วิเคราะห์คู่บิ๊กแมตช์")
-        teams = sorted(df_pl['HomeTeam'].unique())
-        c1, c2 = st.columns(2)
-        with c1: home_sel = st.selectbox("เจ้าบ้าน (Home Team)", teams, index=0)
-        with c2: away_sel = st.selectbox("ทีมเยือน (Away Team)", teams, index=1)
-
-        if home_sel == away_sel:
-            st.warning("กรุณาเลือกทีมที่แตกต่างกัน")
-        else:
-            p_h, p_a, x_h, x_a, conf = get_ultimate_prediction(home_sel, away_sel, df_pl)
-            
-            # การแสดงผลแบบการ์ด "มหาเทพ"
-            st.markdown(f"""
-            <div class='match-card'>
-                <div style='display: flex; justify-content: space-between; align-items: center;'>
-                    <div style='text-align: center; flex: 1;'><h3>{home_sel}</h3><p>xG: {x_h:.2f}</p></div>
-                    <div style='text-align: center; flex: 1;'><h1 style='color: #00ff88;'>{p_h} - {p_a}</h1></div>
-                    <div style='text-align: center; flex: 1;'><h3>{away_sel}</h3><p>xG: {x_a:.2f}</p></div>
-                </div>
-                <div style='text-align: center; margin-top: 20px;'>
-                    <span style='background: #3d195d; padding: 5px 20px; border-radius: 20px;'>
-                        ความมั่นใจ AI: {conf:.1f}%
-                    </span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    with tab2:
-        st.subheader("เช็คผลงาน AI ย้อนหลัง (Error Tracker)")
-        recent_5 = df_pl.tail(10).iloc[::-1] # ดู 10 นัดล่าสุด
+# --- 3. AI PREDICTION LOGIC ---
+def predict_match(home, away, stats_df):
+    if home not in stats_df['HomeTeam'].values or away not in stats_df['AwayTeam'].values:
+        return 0, 0, 0 # กรณีทีมใหม่ไม่มีข้อมูล
         
-        comparison = []
-        for _, row in recent_5.iterrows():
-            # ใช้ข้อมูลก่อนหน้าวันแข่งจริง (ในที่นี้จำลองเพื่อโชว์ผล)
-            ph, pa, _, _, _ = get_ultimate_prediction(row['HomeTeam'], row['AwayTeam'], df_pl)
-            
-            actual = f"{row['FTHG']}-{row['FTAG']}"
-            pred = f"{ph}-{pa}"
-            diff = abs(ph - row['FTHG']) + abs(pa - row['FTAG'])
-            
-            if diff == 0: status = "✅ แม่นยำที่สุด"
-            elif diff <= 1: status = "🟡 ใกล้เคียง"
-            else: status = "❌ พลาด"
-            
-            comparison.append({
-                "วันที่": row['Date'].strftime('%d/%b'),
-                "คู่แข่งขัน": f"{row['HomeTeam']} vs {row['AwayTeam']}",
-                "ผลจริง": actual,
-                "AI ทาย": pred,
-                "สถานะ": status
-            })
-        
-        st.table(pd.DataFrame(comparison))
-
-    with tab3:
-        # แสดงตารางคะแนนจำลองจากสถิติ
-        st.subheader("อันดับความแข็งแกร่ง (AI Power Ranking)")
-        ranking = df_pl.groupby('HomeTeam')[['FTHG', 'FTAG']].mean().sort_values('FTHG', ascending=False)
-        st.bar_chart(ranking['FTHG'])
-
-# --- 5. PHP & DATABASE INTEGRATION HINT ---
-with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/en/f/f2/Premier_League_Logo.svg", width=100)
-    st.markdown("### 🛠️ Developer Mode")
-    if st.checkbox("Show JSON for PHP API"):
-        # ตัวอย่าง JSON ที่ PHP จะได้รับ
-        sample_json = {
-            "match": f"{home_sel} vs {away_sel}",
-            "prediction": {"home": int(p_h), "away": int(p_a)},
-            "xg": {"home": float(x_h), "away": float(x_a)},
-            "timestamp": datetime.now().isoformat()
-        }
-        st.json(sample_json)
+    avg_h_g = stats_df['FTHG'].mean()
+    avg_a_g = stats_df['FTAG'].mean()
     
-    st.info("คำแนะนำ: รันสคริปต์นี้ใน Background แล้วส่งข้อมูลเข้า MySQL เพื่อให้หน้าเว็บ PHP ดึงข้อมูลไปโชว์แบบ Real-time")
+    h_att = stats_df[stats_df['HomeTeam'] == home]['FTHG'].mean() / avg_h_g
+    h_def = stats_df[stats_df['HomeTeam'] == home]['FTAG'].mean() / avg_a_g
+    a_att = stats_df[stats_df['AwayTeam'] == away]['FTAG'].mean() / avg_a_g
+    a_def = stats_df[stats_df['AwayTeam'] == away]['FTHG'].mean() / avg_h_g
+    
+    exp_h = h_att * a_def * avg_h_g
+    exp_a = a_att * h_def * avg_a_goals = avg_a_g # simplified
+    
+    p_h = np.argmax([poisson.pmf(i, exp_h) for i in range(6)])
+    p_a = np.argmax([poisson.pmf(i, exp_a) for i in range(6)])
+    conf = (max([poisson.pmf(i, exp_h) for i in range(6)]) * max([poisson.pmf(i, exp_a) for i in range(6)])) * 100
+    
+    return p_h, p_a, conf
+
+# --- 4. TEXT LOGGING SYSTEM ---
+def save_to_text(log_entry):
+    with open("predictions_log.txt", "a", encoding="utf-8") as f:
+        f.write(log_entry + "\n")
+
+# --- 5. MAIN UI ---
+st.title("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League: Full Schedule Prediction")
+stats_df, fix_df = load_data()
+
+if not fix_df.empty:
+    # กรองเฉพาะคู่ที่ยังไม่เตะ
+    fix_df['DateUtc'] = pd.to_datetime(fix_df['DateUtc'])
+    upcoming = fix_df[fix_df['DateUtc'] >= datetime.utcnow()].sort_values('DateUtc').head(20)
+
+    if st.button("🚀 วิเคราะห์ทุกล่วงหน้าและบันทึกลง Text File"):
+        log_content = f"--- Prediction Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n"
+        st.success("บันทึกข้อมูลการทายผลลงไฟล์ predictions_log.txt เรียบร้อยแล้ว!")
+        
+        for _, row in upcoming.iterrows():
+            h, a = row['HomeTeam'], row['AwayTeam']
+            p_h, p_a, conf = predict_match(h, a, stats_df)
+            date_str = row['DateUtc'].strftime('%d/%m %H:%M')
+            
+            # เก็บข้อมูลลง Log
+            entry = f"[{date_str}] {h} {p_h}-{p_a} {a} (Conf: {conf:.1f}%)"
+            save_to_text(entry)
+
+    # แสดงผลบนหน้าเว็บ
+    st.markdown("### 📅 ตารางการคาดการณ์ล่วงหน้า")
+    for _, row in upcoming.iterrows():
+        h, a = row['HomeTeam'], row['AwayTeam']
+        p_h, p_a, conf = predict_match(h, a, stats_df)
+        
+        st.markdown(f"""
+        <div class="match-row">
+            <div class="date-text">{row['DateUtc'].strftime('%d %b %H:%M')}</div>
+            <div class="team-name" style="text-align:right;">{h}</div>
+            <div class="score-pred">{p_h} - {p_a}</div>
+            <div class="team-name" style="text-align:left;">{a}</div>
+            <div class="conf-tag">มั่นใจ {conf:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- 6. DOWNLOAD SECTION ---
+st.divider()
+try:
+    with open("predictions_log.txt", "rb") as file:
+        st.download_button(
+            label="📥 ดาวน์โหลดไฟล์ข้อมูลการทายผล (.txt)",
+            data=file,
+            file_name="football_predictions.txt",
+            mime="text/plain"
+        )
+except:
+    st.info("กดปุ่ม 'วิเคราะห์' ด้านบนเพื่อสร้างไฟล์ข้อมูล")
