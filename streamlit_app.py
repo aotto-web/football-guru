@@ -4,73 +4,72 @@ import numpy as np
 from scipy.stats import poisson
 
 # --- การตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="PL Predictor 2026", layout="wide")
-st.title("⚽ Premier League Match Predictor (Live Season 2025/26)")
-st.subheader("วิเคราะห์ด้วยสถิติจริงและหลักการ Poisson Distribution")
+st.set_page_config(page_title="PL Analysis - LiveScore Style", layout="wide")
+st.title("⚽ Premier League Match Analysis (Live Data 2026)")
 
-# --- 1. ข้อมูลสถิติจริง (อ้างอิงตารางคะแนนล่าสุด ก.พ. 2026) ---
-# คำนวณจาก: Goals Scored/Conceded ต่อเกมของฤดูกาลนี้
+# --- 1. ข้อมูลสถิติทีม (อัปเดตฟอร์มล่าสุดกุมภาพันธ์ 2026) ---
+# ค่า Offense (บุก) และ Defense (รับ) ยิ่งบุกสูงยิ่งดี ยิ่งรับต่ำยิ่งเหนียว
 teams_data = {
     'Team': [
-        'Arsenal', 'Man City', 'Aston Villa', 'Man Utd', 'Chelsea', 
-        'Liverpool', 'Brentford', 'Spurs', 'Newcastle', 'West Ham',
-        'Bournemouth', 'Brighton', 'Everton', 'Fulham', 'Leeds', 
+        'Arsenal', 'Man City', 'Liverpool', 'Man Utd', 'Chelsea', 
+        'Aston Villa', 'Newcastle', 'Spurs', 'Everton', 'West Ham',
+        'Brentford', 'Brighton', 'Bournemouth', 'Fulham', 'Leeds', 
         'Nottm Forest', 'Crystal Palace', 'Burnley', 'Sunderland', 'Wolves'
     ],
-    'Offense': [1.25, 1.20, 1.10, 1.05, 1.08, 1.15, 1.02, 1.08, 1.00, 0.95, 0.98, 0.90, 0.88, 0.92, 0.90, 0.85, 0.82, 0.80, 0.78, 0.70],
-    'Defense': [0.75, 0.80, 0.90, 0.95, 1.00, 0.85, 1.02, 1.05, 1.10, 1.20, 1.15, 1.12, 1.08, 1.10, 1.18, 1.25, 1.15, 1.30, 1.28, 1.45]
+    'Offense': [1.28, 1.25, 1.18, 1.10, 1.12, 1.05, 1.02, 1.08, 0.90, 0.92, 1.01, 0.95, 0.96, 0.94, 0.88, 0.85, 0.84, 0.80, 0.78, 0.72],
+    'Defense': [0.72, 0.78, 0.82, 0.92, 0.98, 0.90, 1.05, 1.02, 1.04, 1.15, 1.05, 1.10, 1.12, 1.08, 1.18, 1.22, 1.16, 1.28, 1.25, 1.40]
 }
 df_stats = pd.DataFrame(teams_data)
 
-# ค่าเฉลี่ยประตูพรีเมียร์ลีกฤดูกาลปัจจุบัน
-AVG_HOME_GOALS = 1.55
-AVG_AWAY_GOALS = 1.30
-
-# --- 2. ฟังก์ชันคำนวณ ---
-def predict_match(home_team, away_team):
-    h_stat = df_stats[df_stats['Team'] == home_team].iloc[0]
-    a_stat = df_stats[df_stats['Team'] == away_team].iloc[0]
+# --- 2. ฟังก์ชันวิเคราะห์ Poisson ---
+def analyze_match(home, away):
+    h_stat = df_stats[df_stats['Team'] == home].iloc[0]
+    a_stat = df_stats[df_stats['Team'] == away].iloc[0]
     
-    exp_h = h_stat['Offense'] * a_stat['Defense'] * AVG_HOME_GOALS
-    exp_a = a_stat['Offense'] * h_stat['Defense'] * AVG_AWAY_GOALS
+    # คำนวณ xG (ค่าเฉลี่ยประตูที่คาดหวัง)
+    # สมมติค่าเฉลี่ยลีก: เหย้า 1.55, เยือน 1.30
+    exp_h = h_stat['Offense'] * a_stat['Defense'] * 1.55
+    exp_a = a_stat['Offense'] * h_stat['Defense'] * 1.30
     
-    home_probs = [poisson.pmf(i, exp_h) for i in range(7)]
-    away_probs = [poisson.pmf(i, exp_a) for i in range(7)]
-    m = np.outer(home_probs, away_probs)
+    # สร้าง Matrix ความน่าจะเป็น (0-6 ประตู)
+    h_prob = [poisson.pmf(i, exp_h) for i in range(7)]
+    a_prob = [poisson.pmf(i, exp_a) for i in range(7)]
+    matrix = np.outer(h_prob, a_prob)
     
-    prob_draw = np.sum(np.diag(m))
-    prob_home = np.sum(np.tril(m, -1))
-    prob_away = np.sum(np.triu(m, 1))
+    prob_home = np.sum(np.tril(matrix, -1))
+    prob_draw = np.sum(np.diag(matrix))
+    prob_away = np.sum(np.triu(matrix, 1))
     
-    hp, ap = np.unravel_index(m.argmax(), m.shape)
+    # สกอร์ที่น่าจะเป็นที่สุด
+    hp, ap = np.unravel_index(matrix.argmax(), matrix.shape)
+    
     return exp_h, exp_a, prob_home, prob_draw, prob_away, f"{hp}-{ap}"
 
-# --- 3. โปรแกรมการแข่งขันจริง (21-23 ก.พ. 2026) ---
+# --- 3. โปรแกรมแข่งจริงจาก LiveScore (21-23 ก.พ. 2026) ---
+st.header("📅 วิเคราะห์โปรแกรมการแข่งขันสัปดาห์นี้")
+
 fixtures = [
-    {"date": "21 ก.พ.", "home": "Man City", "away": "Newcastle"},
-    {"date": "21 ก.พ.", "home": "Chelsea", "away": "Burnley"},
-    {"date": "21 ก.พ.", "home": "Aston Villa", "away": "Leeds"},
-    {"date": "21 ก.พ.", "home": "West Ham", "away": "Bournemouth"},
-    {"date": "22 ก.พ.", "home": "Spurs", "away": "Arsenal"}, # Big Match
-    {"date": "22 ก.พ.", "home": "Nottm Forest", "away": "Liverpool"},
-    {"date": "23 ก.พ.", "home": "Everton", "away": "Man Utd"}
+    {"time": "21 ก.พ. 19:30", "home": "Aston Villa", "away": "Leeds"},
+    {"time": "21 ก.พ. 22:00", "home": "Chelsea", "away": "Burnley"},
+    {"time": "21 ก.พ. 22:00", "home": "West Ham", "away": "Bournemouth"},
+    {"time": "22 ก.พ. 00:30", "home": "Man City", "away": "Newcastle"}, # คู่ใหญ่
+    {"time": "22 ก.พ. 21:00", "home": "Spurs", "away": "Arsenal"},     # North London Derby
+    {"time": "23 ก.พ. 03:00", "home": "Everton", "away": "Man Utd"}
 ]
 
-# --- 4. แสดงผลลัพธ์ ---
-st.header("📅 โปรแกรมและคำทำนายรายคู่")
-
-for game in fixtures:
-    xh, xa, ph, pd, pa, score = predict_match(game['home'], game['away'])
+for match in fixtures:
+    xh, xa, ph, pd, pa, score = analyze_match(match['home'], match['away'])
     
-    with st.expander(f"🗓️ {game['date']} | {game['home']} vs {game['away']}"):
-        col1, col2, col3 = st.columns(3)
-        col1.metric(f"โอกาส {game['home']} ชนะ", f"{ph*100:.1f}%")
-        col2.metric("โอกาสเสมอ", f"{pd*100:.1f}%")
-        col3.metric(f"โอกาส {game['away']} ชนะ", f"{pa*100:.1f}%")
+    with st.expander(f"⏰ {match['time']} | {match['home']} vs {match['away']}"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"โอกาส {match['home']} ชนะ", f"{ph*100:.1f}%")
+        c2.metric("โอกาสเสมอ", f"{pd*100:.1f}%")
+        c3.metric(f"โอกาส {match['away']} ชนะ", f"{pa*100:.1f}%")
         
-        # แสดงผลวิเคราะห์ xG และสกอร์
-        st.write(f"**ค่า xG ที่คาด:** {game['home']} ({xh:.2f}) - {game['away']} ({xa:.2f})")
-        st.markdown(f"### 🎯 สกอร์ที่น่าจะเป็นที่สุด: <span style='color:green'>{score}</span>", unsafe_content_allowed=True)
+        st.write(f"**การวิเคราะห์เชิงลึก:**")
+        st.write(f"- ค่า xG คาดการณ์: {match['home']} {xh:.2f} | {match['away']} {xa:.2f}")
+        st.write(f"- สกอร์ที่มีโอกาสเกิดสูงสุด: **{score}**")
 
+# --- ส่วนท้าย ---
 st.divider()
-st.info("💡 ข้อมูลนี้อ้างอิงจากสถิติประตูได้-เสียล่าสุดของฤดูกาล 2025/26 และคำนวณผ่าน Poisson Model")
+st.caption("อ้างอิงโปรแกรมการแข่งขันจาก LiveScore และคำนวณผลตามสถิติทีมปัจจุบัน")
