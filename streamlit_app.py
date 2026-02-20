@@ -2,99 +2,113 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import poisson
+import requests
 
 # --- ตั้งค่าหน้าจอ ---
-st.set_page_config(page_title="PL Auto-Predictor 2026", layout="wide")
-st.title("🏆 Premier League Predictor (No-Block Version)")
+st.set_page_config(page_title="PL Unstoppable Predictor", layout="wide")
+st.title("🏆 Premier League Predictor (API Version)")
 
-# --- 1. ดึงตารางคะแนนสดจาก Wikipedia (เสถียรและไม่ค่อยบล็อก) ---
+# ใส่ API Key ของคุณที่นี่ (สมัครฟรีที่ football-data.org)
+API_KEY = "ใส่_API_KEY_ของคุณที่ตรงนี้" 
+
+# --- ฟังก์ชันดึงข้อมูลผ่าน API ---
+def fetch_api(endpoint):
+    headers = {'X-Auth-Token': API_KEY}
+    url = f"https://api.football-data.org/v4/{endpoint}"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error(f"API Error: {response.status_code}. ตรวจสอบ API Key ของคุณ")
+        return None
+
+# --- 1. ดึงตารางคะแนนเพื่อหาค่า Strength ---
 @st.cache_data(ttl=3600)
-def get_live_stats_wiki():
-    try:
-        # Wikipedia มีตารางคะแนนพรีเมียร์ลีกที่อัปเดตไวมาก
-        url = "https://en.wikipedia.org/wiki/2025%E2%80%9326_Premier_League"
-        tables = pd.read_html(url)
+def get_stats():
+    data = fetch_api("competitions/PL/standings")
+    if data:
+        table = data['standings'][0]['table']
+        rows = []
+        for team in table:
+            rows.append({
+                'Team': team['team']['shortName'],
+                'Played': team['playedGames'],
+                'GF': team['goalsFor'],
+                'GA': team['goalsAgainst'],
+                'Pts': team['points']
+            })
+        df = pd.DataFrame(rows)
         
-        # ค้นหาตารางที่มีคำว่า 'Points' หรือ 'Pos'
-        df = None
-        for t in tables:
-            if 'Pts' in t.columns and 'GF' in t.columns:
-                df = t
-                break
+        # คำนวณค่าเฉลี่ยลีก
+        avg_gf = df['GF'].mean()
+        avg_ga = df['GA'].mean()
         
-        if df is not None:
-            # เลือกคอลัมน์: ทีม, แข่ง(Pld), ได้(GF), เสีย(GA), แต้ม(Pts)
-            df = df[['Team', 'Pld', 'GF', 'GA', 'Pts']]
-            df.columns = ['Team', 'M', 'Scored', 'Conceded', 'Pts']
-            
-            # ล้างชื่อทีม (บางครั้งมีหมายเหตุ เช่น (C), (R))
-            df['Team'] = df['Team'].str.replace(r'\(.*\)', '', regex=True).str.strip()
-            
-            # คำนวณค่าเฉลี่ยและ Strength
-            avg_scored = df['Scored'].astype(float).mean()
-            avg_conceded = df['Conceded'].astype(float).mean()
-            
-            df['Offense'] = df['Scored'].astype(float) / avg_scored
-            df['Defense'] = df['Conceded'].astype(float) / avg_conceded
-            
-            return df, avg_scored / df['M'].astype(float).mean(), avg_conceded / df['M'].astype(float).mean()
-    except Exception as e:
-        st.error(f"Wikipedia Error: {e}")
+        # คำนวณ Strength
+        df['Offense'] = df['GF'] / avg_gf
+        df['Defense'] = df['GA'] / avg_ga
+        
+        return df, avg_gf / df['Played'].mean(), avg_ga / df['Played'].mean()
     return None, 1.5, 1.3
 
-# --- 2. ฟังก์ชันคำนวณทำนายผล ---
-def predict_match(home, away, stats_df, avg_h, avg_a):
+# --- 2. ดึงโปรแกรมการแข่งขัน (Fixtures) อัตโนมัติ ---
+@st.cache_data(ttl=3600)
+def get_fixtures():
+    data = fetch_api("competitions/PL/matches?status=SCHEDULED")
+    if data:
+        matches = data['matches']
+        upcoming = []
+        for m in matches[:10]: # เอา 10 คู่ถัดไป
+            upcoming.append({
+                'Date': m['utcDate'][:10],
+                'Home': m['homeTeam']['shortName'],
+                'Away': m['awayTeam']['shortName']
+            })
+        return pd.DataFrame(upcoming)
+    return None
+
+# --- 3. สูตรคำนวณทำนายผล ---
+def predict(home, away, df, avg_h, avg_a):
     try:
-        # ค้นหาชื่อทีมแบบยืดหยุ่น (Fuzzy Match เบื้องต้น)
-        h_stat = stats_df[stats_df['Team'].str.contains(home, case=False, na=False)].iloc[0]
-        a_stat = stats_df[stats_df['Team'].str.contains(away, case=False, na=False)].iloc[0]
+        h_s = df[df['Team'] == home].iloc[0]
+        a_s = df[df['Team'] == away].iloc[0]
         
-        exp_h = h_stat['Offense'] * a_stat['Defense'] * avg_h
-        exp_a = a_stat['Offense'] * h_stat['Defense'] * avg_a
+        exp_h = h_s['Offense'] * a_s['Defense'] * avg_h
+        exp_a = a_s['Offense'] * h_s['Defense'] * avg_a
         
-        h_prob = [poisson.pmf(i, exp_h) for i in range(7)]
-        a_prob = [poisson.pmf(i, exp_a) for i in range(7)]
-        matrix = np.outer(h_prob, a_prob)
+        # Poisson Matrix
+        h_p = [poisson.pmf(i, exp_h) for i in range(7)]
+        a_p = [poisson.pmf(i, exp_a) for i in range(7)]
+        matrix = np.outer(h_p, a_p)
         
-        ph = np.sum(np.tril(matrix, -1))
-        pd = np.sum(np.diag(matrix))
-        pa = np.sum(np.triu(matrix, 1))
+        prob_h = np.sum(np.tril(matrix, -1))
+        prob_d = np.sum(np.diag(matrix))
+        prob_a = np.sum(np.triu(matrix, 1))
         hp, ap = np.unravel_index(matrix.argmax(), matrix.shape)
         
-        return exp_h, exp_a, ph, pd, pa, f"{hp}-{ap}"
+        return exp_h, exp_a, prob_h, prob_d, prob_a, f"{hp}-{ap}"
     except:
-        return 0, 0, 0, 0, 0, "N/A"
+        return 0,0,0,0,0,"N/A"
 
-# --- 3. ส่วนการแสดงผล ---
-df_stats, avg_h, avg_a = get_live_stats_wiki()
-
-if df_stats is not None:
-    st.sidebar.success("เชื่อมต่อข้อมูลตารางคะแนนสำเร็จ!")
-    st.sidebar.dataframe(df_stats[['Team', 'Pts', 'Offense', 'Defense']], hide_index=True)
-
-    st.header("🔮 วิเคราะห์คู่แข่งขันถัดไป")
-    
-    # เนื่องจากโปรแกรมแข่งดึงยาก เราจะทำระบบ "เลือกคู่เอง" ที่ดึงรายชื่อทีมมาจากตารางคะแนนอัตโนมัติ
-    # ทำให้รันได้ทุกคู่ "Auto" ตลอดกาล ไม่ว่าจะเป็นคู่ไหนในลีก
-    team_list = sorted(df_stats['Team'].tolist())
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        h_team = st.selectbox("เลือกเจ้าบ้าน (Home)", team_list, index=0)
-    with col_b:
-        a_team = st.selectbox("เลือกทีมเยือน (Away)", team_list, index=1)
-
-    if h_team and a_team:
-        xh, xa, ph, pd, pa, score = predict_match(h_team, a_team, df_stats, avg_h, avg_a)
-        
-        st.divider()
-        c1, c2, c3 = st.columns(3)
-        c1.metric(f"{h_team} ชนะ", f"{ph*100:.1f}%")
-        c2.metric("เสมอ", f"{pd*100:.1f}%")
-        c3.metric(f"{a_team} ชนะ", f"{pa*100:.1f}%")
-        
-        st.subheader(f"🎯 สกอร์ที่คาดหวัง: {score}")
-        st.write(f"ค่าความน่าจะเป็นเชิงสถิติ (xG): {h_team} {xh:.2f} VS {a_team} {xa:.2f}")
-
+# --- การแสดงผล ---
+if API_KEY == "ใส่_API_KEY_ของคุณที่ตรงนี้":
+    st.warning("⚠️ กรุณาใส่ API Key ใน Code เพื่อเริ่มการดึงข้อมูลอัตโนมัติ")
 else:
-    st.error("ไม่สามารถเข้าถึงแหล่งข้อมูลได้ในขณะนี้ โปรดลองใหม่อีกครั้ง")
+    df_stats, ah, aa = get_stats()
+    df_fix = get_fixtures()
+
+    if df_stats is not None:
+        st.sidebar.header("📊 ค่าพลังทีมปัจจุบัน")
+        st.sidebar.dataframe(df_stats[['Team', 'Offense', 'Defense']])
+
+        st.header("📅 โปรแกรมการแข่งขันนัดถัดไป (Auto-Loaded)")
+        if df_fix is not None and not df_fix.empty:
+            for _, match in df_fix.iterrows():
+                xh, xa, ph, pd, pa, score = predict(match['Home'], match['Away'], df_stats, ah, aa)
+                with st.expander(f"🏟️ {match['Date']} | {match['Home']} vs {match['Away']}"):
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("เจ้าบ้านชนะ", f"{ph*100:.1f}%")
+                    c2.metric("เสมอ", f"{pd*100:.1f}%")
+                    c3.metric("ทีมเยือนชนะ", f"{pa*100:.1f}%")
+                    st.write(f"สกอร์ที่คาด: **{score}** (xG: {xh:.2f} - {xa:.2f})")
+        else:
+            st.info("ไม่มีโปรแกรมการแข่งขันที่กำลังจะมาถึง")
